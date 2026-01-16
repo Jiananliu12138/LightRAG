@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RAGAS Evaluation Script for LightRAG System
+RAGAS Evaluation Script for LightRAG System (Using Ollama)
 
 Evaluates RAG response quality using RAGAS metrics:
 - Faithfulness: Is the answer factually accurate based on context?
@@ -26,14 +26,19 @@ Usage:
     # Get help
     python lightrag/evaluation/eval_rag_quality.py --help
 
+Environment Variables:
+    EVAL_LLM_MODEL: Ollama LLM model name (default: qwen2.5-32b)
+    EVAL_EMBEDDING_MODEL: Ollama embedding model name (default: nomic-embed)
+    EVAL_OLLAMA_HOST: Ollama endpoint URL (default: http://localhost:11434)
+
 Results are saved to: lightrag/evaluation/results/
     - results_YYYYMMDD_HHMMSS.csv   (CSV export for analysis)
     - results_YYYYMMDD_HHMMSS.json  (Full results with details)
 
 Technical Notes:
-    - Uses stable RAGAS API (LangchainLLMWrapper) for maximum compatibility
-    - Supports custom OpenAI-compatible endpoints via EVAL_LLM_BINDING_HOST
-    - Enables bypass_n mode for endpoints that don't support 'n' parameter
+    - Uses Ollama for local model deployment
+    - Requires Ollama server running with models: qwen2.5-32b, nomic-embed
+    - Uses LangchainLLMWrapper for compatibility with RAGAS
     - Deprecation warnings are suppressed for cleaner output
 """
 
@@ -90,7 +95,8 @@ try:
         Faithfulness,
     )
     from ragas.llms import LangchainLLMWrapper
-    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    from langchain_community.chat_models import ChatOllama
+    from langchain_community.embeddings import OllamaEmbeddings
     from tqdm.auto import tqdm
 
     RAGAS_AVAILABLE = True
@@ -125,16 +131,12 @@ class RAGEvaluator:
                         If None, will try to read from environment or use default
 
         Environment Variables:
-            EVAL_LLM_MODEL: LLM model for evaluation (default: gpt-4o-mini)
-            EVAL_EMBEDDING_MODEL: Embedding model for evaluation (default: text-embedding-3-small)
-            EVAL_LLM_BINDING_API_KEY: API key for LLM (fallback to OPENAI_API_KEY)
-            EVAL_LLM_BINDING_HOST: Custom endpoint URL for LLM (optional)
-            EVAL_EMBEDDING_BINDING_API_KEY: API key for embeddings (fallback: EVAL_LLM_BINDING_API_KEY -> OPENAI_API_KEY)
-            EVAL_EMBEDDING_BINDING_HOST: Custom endpoint URL for embeddings (fallback: EVAL_LLM_BINDING_HOST)
+            EVAL_LLM_MODEL: LLM model for evaluation (default: qwen2.5-32b)
+            EVAL_EMBEDDING_MODEL: Embedding model for evaluation (default: nomic-embed)
+            EVAL_OLLAMA_HOST: Ollama endpoint URL (default: http://localhost:11434)
 
         Raises:
             ImportError: If ragas or datasets packages are not installed
-            EnvironmentError: If EVAL_LLM_BINDING_API_KEY and OPENAI_API_KEY are both not set
         """
         # Validate RAGAS dependencies are installed
         if not RAGAS_AVAILABLE:
@@ -143,56 +145,29 @@ class RAGEvaluator:
                 "Install with: pip install ragas datasets"
             )
 
-        # Configure evaluation LLM (for RAGAS scoring)
-        eval_llm_api_key = os.getenv("EVAL_LLM_BINDING_API_KEY") or os.getenv(
-            "OPENAI_API_KEY"
-        )
-        if not eval_llm_api_key:
-            raise EnvironmentError(
-                "EVAL_LLM_BINDING_API_KEY or OPENAI_API_KEY is required for evaluation. "
-                "Set EVAL_LLM_BINDING_API_KEY to use a custom API key, "
-                "or ensure OPENAI_API_KEY is set."
-            )
+        # Configure Ollama endpoint
+        ollama_host = os.getenv("EVAL_OLLAMA_HOST", "http://localhost:11434")
+        
+        # Configure evaluation LLM (for RAGAS scoring) - using Ollama
+        eval_model = os.getenv("EVAL_LLM_MODEL", "qwen2.5-32b")
+        
+        # Configure evaluation embeddings (for RAGAS scoring) - using Ollama
+        eval_embedding_model = os.getenv("EVAL_EMBEDDING_MODEL", "nomic-embed")
 
-        eval_model = os.getenv("EVAL_LLM_MODEL", "gpt-4o-mini")
-        eval_llm_base_url = os.getenv("EVAL_LLM_BINDING_HOST")
-
-        # Configure evaluation embeddings (for RAGAS scoring)
-        # Fallback chain: EVAL_EMBEDDING_BINDING_API_KEY -> EVAL_LLM_BINDING_API_KEY -> OPENAI_API_KEY
-        eval_embedding_api_key = (
-            os.getenv("EVAL_EMBEDDING_BINDING_API_KEY")
-            or os.getenv("EVAL_LLM_BINDING_API_KEY")
-            or os.getenv("OPENAI_API_KEY")
-        )
-        eval_embedding_model = os.getenv(
-            "EVAL_EMBEDDING_MODEL", "text-embedding-3-large"
-        )
-        # Fallback chain: EVAL_EMBEDDING_BINDING_HOST -> EVAL_LLM_BINDING_HOST -> None
-        eval_embedding_base_url = os.getenv("EVAL_EMBEDDING_BINDING_HOST") or os.getenv(
-            "EVAL_LLM_BINDING_HOST"
-        )
-
-        # Create LLM and Embeddings instances for RAGAS
+        # Create LLM and Embeddings instances for RAGAS using Ollama
         llm_kwargs = {
             "model": eval_model,
-            "api_key": eval_llm_api_key,
-            "max_retries": int(os.getenv("EVAL_LLM_MAX_RETRIES", "5")),
-            "request_timeout": int(os.getenv("EVAL_LLM_TIMEOUT", "180")),
+            "base_url": ollama_host,
+            "temperature": 0.0,  # 确保评估的一致性
         }
         embedding_kwargs = {
             "model": eval_embedding_model,
-            "api_key": eval_embedding_api_key,
+            "base_url": ollama_host,
         }
 
-        if eval_llm_base_url:
-            llm_kwargs["base_url"] = eval_llm_base_url
-
-        if eval_embedding_base_url:
-            embedding_kwargs["base_url"] = eval_embedding_base_url
-
-        # Create base LangChain LLM
-        base_llm = ChatOpenAI(**llm_kwargs)
-        self.eval_embeddings = OpenAIEmbeddings(**embedding_kwargs)
+        # Create base LangChain LLM with Ollama
+        base_llm = ChatOllama(**llm_kwargs)
+        self.eval_embeddings = OllamaEmbeddings(**embedding_kwargs)
 
         # Wrap LLM with LangchainLLMWrapper and enable bypass_n mode for custom endpoints
         # This ensures compatibility with endpoints that don't support the 'n' parameter
@@ -228,48 +203,21 @@ class RAGEvaluator:
         # Store configuration values for display
         self.eval_model = eval_model
         self.eval_embedding_model = eval_embedding_model
-        self.eval_llm_base_url = eval_llm_base_url
-        self.eval_embedding_base_url = eval_embedding_base_url
-        self.eval_max_retries = llm_kwargs["max_retries"]
-        self.eval_timeout = llm_kwargs["request_timeout"]
+        self.ollama_host = ollama_host
 
         # Display configuration
         self._display_configuration()
 
     def _display_configuration(self):
         """Display all evaluation configuration settings"""
-        logger.info("Evaluation Models:")
+        logger.info("Evaluation Models (Ollama):")
         logger.info("  • LLM Model:            %s", self.eval_model)
         logger.info("  • Embedding Model:      %s", self.eval_embedding_model)
-
-        # Display LLM endpoint
-        if self.eval_llm_base_url:
-            logger.info("  • LLM Endpoint:         %s", self.eval_llm_base_url)
-            logger.info(
-                "  • Bypass N-Parameter:   Enabled (use LangchainLLMWrapper for compatibility)"
-            )
-        else:
-            logger.info("  • LLM Endpoint:         OpenAI Official API")
-
-        # Display Embedding endpoint (only if different from LLM)
-        if self.eval_embedding_base_url:
-            if self.eval_embedding_base_url != self.eval_llm_base_url:
-                logger.info(
-                    "  • Embedding Endpoint:   %s", self.eval_embedding_base_url
-                )
-            # If same as LLM endpoint, no need to display separately
-        elif not self.eval_llm_base_url:
-            # Both using OpenAI - already displayed above
-            pass
-        else:
-            # LLM uses custom endpoint, but embeddings use OpenAI
-            logger.info("  • Embedding Endpoint:   OpenAI Official API")
+        logger.info("  • Ollama Endpoint:      %s", self.ollama_host)
 
         logger.info("Concurrency & Rate Limiting:")
         query_top_k = int(os.getenv("EVAL_QUERY_TOP_K", "10"))
         logger.info("  • Query Top-K:          %s Entities/Relations", query_top_k)
-        logger.info("  • LLM Max Retries:      %s", self.eval_max_retries)
-        logger.info("  • LLM Timeout:          %s seconds", self.eval_timeout)
 
         logger.info("Test Configuration:")
         logger.info("  • Total Test Cases:     %s", len(self.test_cases))
