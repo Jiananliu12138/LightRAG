@@ -349,3 +349,8 @@
 2026-01-19 20:46:47,943 - uvicorn.access - INFO - 127.0.0.1:35222 - "POST /query HTTP/1.1" 200
 2026-01-19 20:46:56,875 - lightrag - INFO -  == LLM cache == saving: mix:query:f04b660a6aa2619bf7fcd4fa2404ae67
 2026-01-19 20:46:56,890 - uvicorn.access - INFO - 127.0.0.1:35238 - "POST /query HTTP/1.1" 200
+2026-01-19 21:14:16,268 - uvicorn.error - INFO - Shutting down
+2026-01-19 21:14:16,370 - uvicorn.error - INFO - Waiting for application shutdown.
+2026-01-19 21:14:16,372 - lightrag - INFO - Successfully finalized 12 storages
+2026-01-19 21:14:16,373 - uvicorn.error - INFO - Application shutdown complete.
+2026-01-19 21:14:16,374 - uvicorn.error - INFO - Finished server process [1115535]
