@@ -1,5 +1,5 @@
 Todo： 1.运行 lightrag-server 以暴露 lightrag-api for evaluation
-pip install -e ".[api]"
+pip install -e ".[api,evaluation]"
 
 lightrag-server \
  --host 0.0.0.0\

@@ -1,0 +1,351 @@
+2026-01-19 19:50:31,757 - lightrag - INFO - Ollama LLM Options: {}
+2026-01-19 19:50:31,758 - lightrag - INFO - Ollama Embedding Options: {}
+2026-01-19 19:50:33,841 - lightrag - INFO - Embedding config: binding=ollama model=nomic-embed-text embedding_dim=1024 max_token_size=8192
+2026-01-19 19:50:33,841 - lightrag - INFO - Send embedding dimension: False by env var (dimensions=1024, has_param=True, binding=ollama)
+2026-01-19 19:50:33,842 - lightrag - INFO - Embedding max_token_size: 8192 (from ollama provider default)
+2026-01-19 19:50:33,843 - lightrag - INFO - Reranking is disabled
+2026-01-19 19:50:37,193 - lightrag - INFO - [] Created new empty graph file: /home/ik2200-2025-g2/WorkZone/LightRAG/rag_storage/graph_chunk_entity_relation.graphml
+2026-01-19 19:50:37,332 - lightrag - INFO - WebUI assets not available, /webui route not mounted
+2026-01-19 19:50:37,371 - uvicorn.error - INFO - Started server process [1110223]
+2026-01-19 19:50:37,371 - uvicorn.error - INFO - Waiting for application startup.
+2026-01-19 19:50:37,372 - lightrag - INFO - [] Process 1110223 KV load full_docs with 0 records
+2026-01-19 19:50:37,373 - lightrag - INFO - [] Process 1110223 KV load text_chunks with 0 records
+2026-01-19 19:50:37,374 - lightrag - INFO - [] Process 1110223 KV load full_entities with 0 records
+2026-01-19 19:50:37,374 - lightrag - INFO - [] Process 1110223 KV load full_relations with 0 records
+2026-01-19 19:50:37,375 - lightrag - INFO - [] Process 1110223 KV load entity_chunks with 0 records
+2026-01-19 19:50:37,376 - lightrag - INFO - [] Process 1110223 KV load relation_chunks with 0 records
+2026-01-19 19:50:37,376 - lightrag - INFO - [] Process 1110223 KV load llm_response_cache with 0 records
+2026-01-19 19:50:37,377 - lightrag - INFO - [] Process 1110223 doc status load doc_status with 0 records
+2026-01-19 19:50:37,378 - uvicorn.error - INFO - Application startup complete.
+2026-01-19 19:50:37,378 - uvicorn.error - INFO - Uvicorn running on http://0.0.0.0:9621 (Press CTRL+C to quit)
+2026-01-19 19:51:08,649 - uvicorn.access - INFO - 127.0.0.1:45280 - "GET /docs HTTP/1.1" 200
+2026-01-19 19:51:08,747 - uvicorn.access - INFO - 127.0.0.1:45282 - "GET /static/swagger-ui/swagger-ui-bundle.js HTTP/1.1" 200
+2026-01-19 19:51:08,748 - uvicorn.access - INFO - 127.0.0.1:45280 - "GET /static/swagger-ui/swagger-ui.css HTTP/1.1" 200
+2026-01-19 19:51:09,133 - uvicorn.access - INFO - 127.0.0.1:45282 - "GET /openapi.json HTTP/1.1" 200
+2026-01-19 19:51:28,345 - uvicorn.access - INFO - 127.0.0.1:54010 - "GET /favicon.ico HTTP/1.1" 404
+2026-01-19 19:57:47,306 - lightrag - INFO - LLM func: 4 new workers initialized (Timeouts: Func: 180s, Worker: 360s, Health Check: 375s)
+2026-01-19 19:57:51,419 - lightrag - INFO -  == LLM cache == saving: mix:keywords:712381357bb3f68b17fbb53da2afb00b
+2026-01-19 19:57:51,422 - lightrag - INFO - Embedding func: 8 new workers initialized (Timeouts: Func: 30s, Worker: 60s, Health Check: 75s)
+2026-01-19 19:57:51,593 - lightrag - WARNING - Failed to pre-compute query embedding: Embedding dimension mismatch detected: total elements (768) cannot be evenly divided by expected dimension (1024). 
+2026-01-19 19:57:51,593 - lightrag - INFO - Query nodes: Retrieval performance, RAG systems, Performance comparison (top_k:10, cosine:0.2)
+2026-01-19 19:57:51,762 - lightrag - ERROR - Query failed: Embedding dimension mismatch detected: total elements (768) cannot be evenly divided by expected dimension (1024). 
+2026-01-19 19:57:51,763 - uvicorn.access - INFO - 127.0.0.1:41312 - "POST /query HTTP/1.1" 200
+2026-01-19 19:57:52,753 - lightrag - INFO -  == LLM cache == saving: mix:keywords:5254162199dedf990413006a2ff4b7d8
+2026-01-19 19:57:52,870 - lightrag - WARNING - Failed to pre-compute query embedding: Embedding dimension mismatch detected: total elements (768) cannot be evenly divided by expected dimension (1024). 
+2026-01-19 19:57:52,870 - lightrag - INFO - Query nodes: Database types, LightRAG, Performance metrics, Scalability, Query efficiency (top_k:10, cosine:0.2)
+2026-01-19 19:57:52,985 - lightrag - ERROR - Query failed: Embedding dimension mismatch detected: total elements (768) cannot be evenly divided by expected dimension (1024). 
+2026-01-19 19:57:52,986 - uvicorn.access - INFO - 127.0.0.1:41314 - "POST /query HTTP/1.1" 200
+2026-01-19 19:57:54,041 - lightrag - INFO -  == LLM cache == saving: mix:keywords:87464899e8ce3d25002d507a011f7689
+2026-01-19 19:57:54,206 - lightrag - WARNING - Failed to pre-compute query embedding: Embedding dimension mismatch detected: total elements (768) cannot be evenly divided by expected dimension (1024). 
+2026-01-19 19:57:54,206 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Language model accuracy, Contextual understanding (top_k:10, cosine:0.2)
+2026-01-19 19:57:54,362 - lightrag - ERROR - Query failed: Embedding dimension mismatch detected: total elements (768) cannot be evenly divided by expected dimension (1024). 
+2026-01-19 19:57:54,362 - uvicorn.access - INFO - 127.0.0.1:41282 - "POST /query HTTP/1.1" 200
+2026-01-19 19:57:55,140 - lightrag - INFO -  == LLM cache == saving: mix:keywords:b6822ca6e782682a01ae0ad04cb85ba6
+2026-01-19 19:57:55,300 - lightrag - WARNING - Failed to pre-compute query embedding: Embedding dimension mismatch detected: total elements (768) cannot be evenly divided by expected dimension (1024). 
+2026-01-19 19:57:55,301 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Document retrieval, Text generation (top_k:10, cosine:0.2)
+2026-01-19 19:57:55,419 - lightrag - ERROR - Query failed: Embedding dimension mismatch detected: total elements (768) cannot be evenly divided by expected dimension (1024). 
+2026-01-19 19:57:55,419 - uvicorn.access - INFO - 127.0.0.1:41298 - "POST /query HTTP/1.1" 200
+2026-01-19 20:01:28,298 - uvicorn.error - INFO - Shutting down
+2026-01-19 20:01:28,399 - uvicorn.error - INFO - Waiting for application shutdown.
+2026-01-19 20:01:28,402 - lightrag - INFO - Successfully finalized 12 storages
+2026-01-19 20:01:28,403 - uvicorn.error - INFO - Application shutdown complete.
+2026-01-19 20:01:28,404 - uvicorn.error - INFO - Finished server process [1110223]
+2026-01-19 20:01:32,383 - lightrag - INFO - Ollama LLM Options: {}
+2026-01-19 20:01:32,383 - lightrag - INFO - Ollama Embedding Options: {}
+2026-01-19 20:01:32,609 - lightrag - INFO - Embedding config: binding=ollama model=nomic-embed-text embedding_dim=768 max_token_size=8192
+2026-01-19 20:01:32,610 - lightrag - INFO - Send embedding dimension: False by env var (dimensions=768, has_param=True, binding=ollama)
+2026-01-19 20:01:32,611 - lightrag - INFO - Embedding max_token_size: 8192 (from ollama provider default)
+2026-01-19 20:01:32,612 - lightrag - INFO - Reranking is disabled
+2026-01-19 20:01:33,434 - lightrag - INFO - [] Created new empty graph file: /home/ik2200-2025-g2/WorkZone/LightRAG/rag_storage/graph_chunk_entity_relation.graphml
+2026-01-19 20:01:33,674 - lightrag - INFO - WebUI assets not available, /webui route not mounted
+2026-01-19 20:01:33,729 - uvicorn.error - INFO - Started server process [1115535]
+2026-01-19 20:01:33,730 - uvicorn.error - INFO - Waiting for application startup.
+2026-01-19 20:01:33,732 - lightrag - INFO - [] Process 1115535 KV load full_docs with 0 records
+2026-01-19 20:01:33,732 - lightrag - INFO - [] Process 1115535 KV load text_chunks with 0 records
+2026-01-19 20:01:33,733 - lightrag - INFO - [] Process 1115535 KV load full_entities with 0 records
+2026-01-19 20:01:33,734 - lightrag - INFO - [] Process 1115535 KV load full_relations with 0 records
+2026-01-19 20:01:33,736 - lightrag - INFO - [] Process 1115535 KV load entity_chunks with 0 records
+2026-01-19 20:01:33,737 - lightrag - INFO - [] Process 1115535 KV load relation_chunks with 0 records
+2026-01-19 20:01:33,741 - lightrag - INFO - [] Process 1115535 KV load llm_response_cache with 4 records
+2026-01-19 20:01:33,742 - lightrag - INFO - [] Process 1115535 doc status load doc_status with 0 records
+2026-01-19 20:01:33,743 - uvicorn.error - INFO - Application startup complete.
+2026-01-19 20:01:33,744 - uvicorn.error - INFO - Uvicorn running on http://0.0.0.0:9621 (Press CTRL+C to quit)
+2026-01-19 20:01:50,044 - lightrag - INFO - Embedding func: 8 new workers initialized (Timeouts: Func: 30s, Worker: 60s, Health Check: 75s)
+2026-01-19 20:01:50,221 - lightrag - INFO - Query nodes: Retrieval performance, RAG systems, Performance comparison (top_k:10, cosine:0.2)
+2026-01-19 20:01:50,269 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Document retrieval, Text generation (top_k:10, cosine:0.2)
+2026-01-19 20:01:50,269 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Language model accuracy, Contextual understanding (top_k:10, cosine:0.2)
+2026-01-19 20:01:50,317 - lightrag - INFO - Query nodes: Database types, LightRAG, Performance metrics, Scalability, Query efficiency (top_k:10, cosine:0.2)
+2026-01-19 20:01:50,389 - lightrag - INFO - Query edges: LightRAG's retrieval performance, Traditional RAG approaches (top_k:10, cosine:0.2)
+2026-01-19 20:01:50,441 - lightrag - INFO - Query edges: Three main components, RAG system (top_k:10, cosine:0.2)
+2026-01-19 20:01:50,484 - lightrag - INFO - Query edges: Vector databases, LightRAG support, Key characteristics (top_k:10, cosine:0.2)
+2026-01-19 20:01:50,522 - lightrag - INFO - Query edges: LightRAG, Hallucination problem, Large language models (top_k:10, cosine:0.2)
+2026-01-19 20:01:50,611 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:01:50,612 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:01:50,613 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:01:50,615 - uvicorn.access - INFO - 127.0.0.1:60278 - "POST /query HTTP/1.1" 200
+2026-01-19 20:01:50,675 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:01:50,676 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:01:50,677 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:01:50,679 - uvicorn.access - INFO - 127.0.0.1:60272 - "POST /query HTTP/1.1" 200
+2026-01-19 20:01:50,687 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:01:50,688 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:01:50,689 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:01:50,690 - uvicorn.access - INFO - 127.0.0.1:60284 - "POST /query HTTP/1.1" 200
+2026-01-19 20:01:50,700 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:01:50,700 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:01:50,701 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:01:50,703 - uvicorn.access - INFO - 127.0.0.1:60256 - "POST /query HTTP/1.1" 200
+2026-01-19 20:03:49,914 - lightrag - INFO - LLM func: 4 new workers initialized (Timeouts: Func: 180s, Worker: 360s, Health Check: 375s)
+2026-01-19 20:03:54,153 - lightrag - INFO -  == LLM cache == saving: mix:keywords:d7943a9578ae019ae8406a7f6485c532
+2026-01-19 20:03:54,271 - lightrag - INFO - Query nodes: System performance, Information retrieval accuracy, Generation coherence, User satisfaction (top_k:10, cosine:0.2)
+2026-01-19 20:03:54,389 - lightrag - INFO - Query edges: Key metrics, Evaluating RAG systems, Quality assessment (top_k:10, cosine:0.2)
+2026-01-19 20:03:54,487 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:03:54,488 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:03:54,489 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:03:54,493 - uvicorn.access - INFO - 127.0.0.1:53144 - "POST /query HTTP/1.1" 200
+2026-01-19 20:06:13,221 - lightrag - INFO - Query nodes: Retrieval performance, RAG systems, Performance comparison (top_k:10, cosine:0.2)
+2026-01-19 20:06:13,266 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Language model accuracy, Contextual understanding (top_k:10, cosine:0.2)
+2026-01-19 20:06:13,266 - lightrag - INFO - Query nodes: Database types, LightRAG, Performance metrics, Scalability, Query efficiency (top_k:10, cosine:0.2)
+2026-01-19 20:06:13,268 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Document retrieval, Text generation (top_k:10, cosine:0.2)
+2026-01-19 20:06:13,396 - lightrag - INFO - Query edges: LightRAG, Hallucination problem, Large language models (top_k:10, cosine:0.2)
+2026-01-19 20:06:13,466 - lightrag - INFO - Query edges: LightRAG's retrieval performance, Traditional RAG approaches (top_k:10, cosine:0.2)
+2026-01-19 20:06:13,528 - lightrag - INFO - Query edges: Vector databases, LightRAG support, Key characteristics (top_k:10, cosine:0.2)
+2026-01-19 20:06:13,528 - lightrag - INFO - Query edges: Three main components, RAG system (top_k:10, cosine:0.2)
+2026-01-19 20:06:13,551 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:06:13,551 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:06:13,552 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:06:13,576 - uvicorn.access - INFO - 127.0.0.1:53186 - "POST /query HTTP/1.1" 200
+2026-01-19 20:06:13,643 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:06:13,643 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:06:13,645 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:06:13,646 - uvicorn.access - INFO - 127.0.0.1:53208 - "POST /query HTTP/1.1" 200
+2026-01-19 20:06:13,653 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:06:13,654 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:06:13,655 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:06:13,657 - uvicorn.access - INFO - 127.0.0.1:53212 - "POST /query HTTP/1.1" 200
+2026-01-19 20:06:13,664 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:06:13,664 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:06:13,665 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:06:13,666 - uvicorn.access - INFO - 127.0.0.1:53192 - "POST /query HTTP/1.1" 200
+2026-01-19 20:09:12,999 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Document retrieval, Text generation (top_k:10, cosine:0.2)
+2026-01-19 20:09:13,047 - lightrag - INFO - Query nodes: Retrieval performance, RAG systems, Performance comparison (top_k:10, cosine:0.2)
+2026-01-19 20:09:13,047 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Language model accuracy, Contextual understanding (top_k:10, cosine:0.2)
+2026-01-19 20:09:13,049 - lightrag - INFO - Query nodes: Database types, LightRAG, Performance metrics, Scalability, Query efficiency (top_k:10, cosine:0.2)
+2026-01-19 20:09:13,181 - lightrag - INFO - Query edges: LightRAG's retrieval performance, Traditional RAG approaches (top_k:10, cosine:0.2)
+2026-01-19 20:09:13,222 - lightrag - INFO - Query edges: LightRAG, Hallucination problem, Large language models (top_k:10, cosine:0.2)
+2026-01-19 20:09:13,283 - lightrag - INFO - Query edges: Vector databases, LightRAG support, Key characteristics (top_k:10, cosine:0.2)
+2026-01-19 20:09:13,284 - lightrag - INFO - Query edges: Three main components, RAG system (top_k:10, cosine:0.2)
+2026-01-19 20:09:13,285 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:09:13,285 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:09:13,286 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:09:13,331 - uvicorn.access - INFO - 127.0.0.1:40460 - "POST /query HTTP/1.1" 200
+2026-01-19 20:09:13,342 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:09:13,343 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:09:13,344 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:09:13,345 - uvicorn.access - INFO - 127.0.0.1:40450 - "POST /query HTTP/1.1" 200
+2026-01-19 20:09:13,377 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:09:13,378 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:09:13,379 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:09:13,381 - uvicorn.access - INFO - 127.0.0.1:40448 - "POST /query HTTP/1.1" 200
+2026-01-19 20:09:13,407 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:09:13,407 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:09:13,408 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:09:13,409 - uvicorn.access - INFO - 127.0.0.1:40464 - "POST /query HTTP/1.1" 200
+2026-01-19 20:09:45,454 - lightrag - INFO - Query nodes: System performance, Information retrieval accuracy, Generation coherence, User satisfaction (top_k:10, cosine:0.2)
+2026-01-19 20:09:45,579 - lightrag - INFO - Query edges: Key metrics, Evaluating RAG systems, Quality assessment (top_k:10, cosine:0.2)
+2026-01-19 20:09:45,689 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:09:45,689 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:09:45,691 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:09:45,692 - uvicorn.access - INFO - 127.0.0.1:58712 - "POST /query HTTP/1.1" 200
+2026-01-19 20:09:47,748 - lightrag - INFO -  == LLM cache == saving: mix:keywords:a371579f9caa9036f66b0a75c76e5d5d
+2026-01-19 20:09:47,865 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Generation enhancement, Document retrieval, System improvement (top_k:10, cosine:0.2)
+2026-01-19 20:09:47,980 - lightrag - INFO - Query edges: Core benefits, LightRAG, Traditional RAG systems, Improvement (top_k:10, cosine:0.2)
+2026-01-19 20:09:48,091 - lightrag - INFO - Naive query: 0 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:09:48,092 - lightrag - INFO - Raw search results: 0 entities, 0 relations, 0 vector chunks
+2026-01-19 20:09:48,093 - lightrag - INFO - [kg_query] No query context could be built; returning no-result.
+2026-01-19 20:09:48,096 - uvicorn.access - INFO - 127.0.0.1:58710 - "POST /query HTTP/1.1" 200
+2026-01-19 20:17:07,942 - uvicorn.access - INFO - 127.0.0.1:45520 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:07,994 - uvicorn.access - INFO - 127.0.0.1:45532 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:08,020 - uvicorn.access - INFO - 127.0.0.1:45540 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:08,045 - uvicorn.access - INFO - 127.0.0.1:45552 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:08,073 - uvicorn.access - INFO - 127.0.0.1:45560 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:14,820 - uvicorn.access - INFO - 127.0.0.1:59290 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:14,847 - uvicorn.access - INFO - 127.0.0.1:59292 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:14,873 - uvicorn.access - INFO - 127.0.0.1:59296 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:14,899 - uvicorn.access - INFO - 127.0.0.1:59308 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:14,925 - uvicorn.access - INFO - 127.0.0.1:59320 - "POST /insert HTTP/1.1" 404
+2026-01-19 20:17:24,983 - uvicorn.access - INFO - 127.0.0.1:60422 - "GET /docs HTTP/1.1" 200
+2026-01-19 20:17:25,179 - uvicorn.access - INFO - 127.0.0.1:60426 - "GET /openapi.json HTTP/1.1" 200
+2026-01-19 20:18:15,302 - uvicorn.access - INFO - 127.0.0.1:55762 - "POST /documents/text HTTP/1.1" 200
+2026-01-19 20:18:15,311 - lightrag - INFO - Processing 1 document(s)
+2026-01-19 20:18:15,311 - lightrag - INFO - Extracting stage 1/1: 01_lightrag_overview.md
+2026-01-19 20:18:15,312 - lightrag - INFO - Processing d-id: doc-43885d0b4bf9beb71d6b0d9910c35607
+2026-01-19 20:18:15,364 - uvicorn.access - INFO - 127.0.0.1:55772 - "POST /documents/text HTTP/1.1" 200
+2026-01-19 20:18:15,429 - lightrag - INFO - Another process is already processing the document queue. Request queued.
+2026-01-19 20:18:15,429 - uvicorn.access - INFO - 127.0.0.1:55774 - "POST /documents/text HTTP/1.1" 200
+2026-01-19 20:18:15,438 - lightrag - INFO - Another process is already processing the document queue. Request queued.
+2026-01-19 20:18:15,474 - uvicorn.access - INFO - 127.0.0.1:55784 - "POST /documents/text HTTP/1.1" 200
+2026-01-19 20:18:15,482 - lightrag - INFO - Another process is already processing the document queue. Request queued.
+2026-01-19 20:18:15,502 - uvicorn.access - INFO - 127.0.0.1:55794 - "POST /documents/text HTTP/1.1" 200
+2026-01-19 20:18:15,511 - lightrag - INFO - Another process is already processing the document queue. Request queued.
+2026-01-19 20:18:32,035 - lightrag - INFO -  == LLM cache == saving: default:extract:ec4b6b9bb57bc7e6f773bbdb60033ce8
+2026-01-19 20:18:42,380 - lightrag - INFO -  == LLM cache == saving: default:extract:29a69abfba45012457034a4864efed53
+2026-01-19 20:18:42,385 - lightrag - INFO - Chunk 1 of 1 extracted 3 Ent + 5 Rel chunk-43885d0b4bf9beb71d6b0d9910c35607
+2026-01-19 20:18:42,388 - lightrag - INFO - Merging stage 1/1: 01_lightrag_overview.md
+2026-01-19 20:18:42,389 - lightrag - INFO - Phase 1: Processing 3 entities from doc-43885d0b4bf9beb71d6b0d9910c35607 (async: 8)
+2026-01-19 20:18:42,583 - lightrag - INFO - Phase 2: Processing 5 relations from doc-43885d0b4bf9beb71d6b0d9910c35607 (async: 8)
+2026-01-19 20:18:43,556 - lightrag - INFO - Phase 3: Updating final 6(3+3) entities and  5 relations from doc-43885d0b4bf9beb71d6b0d9910c35607
+2026-01-19 20:18:43,557 - lightrag - INFO - Completed merging: 3 entities, 3 extra entities, 5 relations
+2026-01-19 20:18:43,593 - lightrag - INFO - [] Writing graph with 6 nodes, 5 edges
+2026-01-19 20:18:43,671 - lightrag - INFO - In memory DB persist to disk
+2026-01-19 20:18:43,672 - lightrag - INFO - Completed processing file 1/1: 01_lightrag_overview.md
+2026-01-19 20:18:43,674 - lightrag - INFO - Processing additional documents due to pending request
+2026-01-19 20:18:43,676 - lightrag - INFO - Processing 4 document(s)
+2026-01-19 20:18:43,677 - lightrag - INFO - Extracting stage 1/4: 02_rag_architecture.md
+2026-01-19 20:18:43,677 - lightrag - INFO - Processing d-id: doc-cde97f29f1d045af4ace8711a4b40dc2
+2026-01-19 20:18:43,678 - lightrag - INFO - Extracting stage 2/4: 03_lightrag_improvements.md
+2026-01-19 20:18:43,679 - lightrag - INFO - Processing d-id: doc-33cf6cfe009c4582f5c7822bfc2d9140
+2026-01-19 20:18:59,785 - lightrag - INFO -  == LLM cache == saving: default:extract:4edbc5ff0736a6104121694fcc06b88c
+2026-01-19 20:19:16,045 - lightrag - INFO -  == LLM cache == saving: default:extract:9e8c5dc081bb790b21a7cc77a8c82609
+2026-01-19 20:19:19,829 - lightrag - INFO -  == LLM cache == saving: default:extract:0c9b35830491708e3ba2e3784ab01aee
+2026-01-19 20:19:19,831 - lightrag - INFO - Chunk 1 of 1 extracted 2 Ent + 9 Rel chunk-33cf6cfe009c4582f5c7822bfc2d9140
+2026-01-19 20:19:19,833 - lightrag - INFO - Merging stage 2/4: 03_lightrag_improvements.md
+2026-01-19 20:19:19,834 - lightrag - INFO - Phase 1: Processing 2 entities from doc-33cf6cfe009c4582f5c7822bfc2d9140 (async: 8)
+2026-01-19 20:19:20,038 - lightrag - INFO - Phase 2: Processing 9 relations from doc-33cf6cfe009c4582f5c7822bfc2d9140 (async: 8)
+2026-01-19 20:19:21,654 - lightrag - INFO - Phase 3: Updating final 11(2+9) entities and  9 relations from doc-33cf6cfe009c4582f5c7822bfc2d9140
+2026-01-19 20:19:21,655 - lightrag - INFO - Completed merging: 2 entities, 9 extra entities, 9 relations
+2026-01-19 20:19:21,689 - lightrag - INFO - [] Writing graph with 17 nodes, 14 edges
+2026-01-19 20:19:21,696 - lightrag - INFO - In memory DB persist to disk
+2026-01-19 20:19:21,696 - lightrag - INFO - Completed processing file 2/4: 03_lightrag_improvements.md
+2026-01-19 20:19:21,697 - lightrag - INFO - Extracting stage 3/4: 04_supported_databases.md
+2026-01-19 20:19:21,698 - lightrag - INFO - Processing d-id: doc-d205d8cef950c84f5aa969dd46bf8288
+2026-01-19 20:19:23,235 - lightrag - INFO -  == LLM cache == saving: default:extract:209476e70df7d9b9b5dc7b95774b93d1
+2026-01-19 20:19:23,238 - lightrag - INFO - Chunk 1 of 1 extracted 6 Ent + 9 Rel chunk-cde97f29f1d045af4ace8711a4b40dc2
+2026-01-19 20:19:23,240 - lightrag - INFO - Merging stage 1/4: 02_rag_architecture.md
+2026-01-19 20:19:23,240 - lightrag - INFO - Phase 1: Processing 6 entities from doc-cde97f29f1d045af4ace8711a4b40dc2 (async: 8)
+2026-01-19 20:19:23,591 - lightrag - INFO - Phase 2: Processing 7 relations from doc-cde97f29f1d045af4ace8711a4b40dc2 (async: 8)
+2026-01-19 20:19:24,251 - lightrag - INFO - Phase 3: Updating final 6(6+0) entities and  7 relations from doc-cde97f29f1d045af4ace8711a4b40dc2
+2026-01-19 20:19:24,252 - lightrag - INFO - Completed merging: 6 entities, 0 extra entities, 7 relations
+2026-01-19 20:19:24,298 - lightrag - INFO - [] Writing graph with 23 nodes, 21 edges
+2026-01-19 20:19:24,308 - lightrag - INFO - In memory DB persist to disk
+2026-01-19 20:19:24,309 - lightrag - INFO - Completed processing file 1/4: 02_rag_architecture.md
+2026-01-19 20:19:24,310 - lightrag - INFO - Extracting stage 4/4: 05_evaluation_and_deployment.md
+2026-01-19 20:19:24,311 - lightrag - INFO - Processing d-id: doc-8e8c9f2cab667198ee3294275f9f35cb
+2026-01-19 20:19:57,537 - lightrag - INFO -  == LLM cache == saving: default:extract:8adc477f73b0bedcbdf7d54aedcccc33
+2026-01-19 20:20:25,468 - lightrag - INFO -  == LLM cache == saving: default:extract:a009aea55bcd34fbbdbc5cbf8b0fb795
+2026-01-19 20:20:30,974 - lightrag - INFO -  == LLM cache == saving: default:extract:f5ce57c0119ec28f31417fd3a4e6ba7e
+2026-01-19 20:20:30,977 - lightrag - INFO - Chunk 1 of 1 extracted 11 Ent + 16 Rel chunk-d205d8cef950c84f5aa969dd46bf8288
+2026-01-19 20:20:30,980 - lightrag - INFO - Merging stage 3/4: 04_supported_databases.md
+2026-01-19 20:20:30,980 - lightrag - INFO - Phase 1: Processing 11 entities from doc-d205d8cef950c84f5aa969dd46bf8288 (async: 8)
+2026-01-19 20:20:30,986 - lightrag - INFO - Merged: `LightRAG` | 1+1
+2026-01-19 20:20:31,428 - lightrag - INFO - Phase 2: Processing 16 relations from doc-d205d8cef950c84f5aa969dd46bf8288 (async: 8)
+2026-01-19 20:20:32,896 - lightrag - INFO - Phase 3: Updating final 19(11+8) entities and  16 relations from doc-d205d8cef950c84f5aa969dd46bf8288
+2026-01-19 20:20:32,898 - lightrag - INFO - Completed merging: 11 entities, 8 extra entities, 16 relations
+2026-01-19 20:20:32,952 - lightrag - INFO - [] Writing graph with 41 nodes, 37 edges
+2026-01-19 20:20:32,963 - lightrag - INFO - In memory DB persist to disk
+2026-01-19 20:20:32,964 - lightrag - INFO - Completed processing file 3/4: 04_supported_databases.md
+2026-01-19 20:20:33,594 - lightrag - INFO -  == LLM cache == saving: default:extract:8dbf586297c9489b7f7d70b52ae83b91
+2026-01-19 20:20:33,597 - lightrag - INFO - Chunk 1 of 1 extracted 9 Ent + 9 Rel chunk-8e8c9f2cab667198ee3294275f9f35cb
+2026-01-19 20:20:33,599 - lightrag - INFO - Merging stage 4/4: 05_evaluation_and_deployment.md
+2026-01-19 20:20:33,599 - lightrag - INFO - Phase 1: Processing 9 entities from doc-8e8c9f2cab667198ee3294275f9f35cb (async: 8)
+2026-01-19 20:20:33,845 - lightrag - INFO - Merged: `World Athletics Federation` | 1+1
+2026-01-19 20:20:33,961 - lightrag - INFO - Phase 2: Processing 9 relations from doc-8e8c9f2cab667198ee3294275f9f35cb (async: 8)
+2026-01-19 20:20:34,250 - lightrag - INFO - Merged: `Carbon-Fiber Spikes`~`Noah Carter` | 1+1
+2026-01-19 20:20:34,386 - lightrag - INFO - Chunks appended from relation: `Carbon-Fiber Spikes`
+2026-01-19 20:20:34,499 - lightrag - INFO - Chunks appended from relation: `Noah Carter`
+2026-01-19 20:20:34,677 - lightrag - INFO - Phase 3: Updating final 12(9+3) entities and  9 relations from doc-8e8c9f2cab667198ee3294275f9f35cb
+2026-01-19 20:20:34,678 - lightrag - INFO - Completed merging: 9 entities, 3 extra entities, 9 relations
+2026-01-19 20:20:34,738 - lightrag - INFO - [] Writing graph with 52 nodes, 45 edges
+2026-01-19 20:20:34,750 - lightrag - INFO - In memory DB persist to disk
+2026-01-19 20:20:34,751 - lightrag - INFO - Completed processing file 4/4: 05_evaluation_and_deployment.md
+2026-01-19 20:20:34,752 - lightrag - INFO - Enqueued document processing pipeline stopped
+2026-01-19 20:43:25,259 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Document retrieval, Text generation (top_k:10, cosine:0.2)
+2026-01-19 20:43:25,315 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Language model accuracy, Contextual understanding (top_k:10, cosine:0.2)
+2026-01-19 20:43:25,316 - lightrag - INFO - Query nodes: Database types, LightRAG, Performance metrics, Scalability, Query efficiency (top_k:10, cosine:0.2)
+2026-01-19 20:43:25,317 - lightrag - INFO - Query nodes: Retrieval performance, RAG systems, Performance comparison (top_k:10, cosine:0.2)
+2026-01-19 20:43:25,526 - lightrag - INFO - Local query: 10 entites, 16 relations
+2026-01-19 20:43:25,527 - lightrag - INFO - Query edges: LightRAG, Hallucination problem, Large language models (top_k:10, cosine:0.2)
+2026-01-19 20:43:25,561 - lightrag - INFO - Local query: 10 entites, 24 relations
+2026-01-19 20:43:25,561 - lightrag - INFO - Query edges: LightRAG's retrieval performance, Traditional RAG approaches (top_k:10, cosine:0.2)
+2026-01-19 20:43:25,594 - lightrag - INFO - Local query: 10 entites, 24 relations
+2026-01-19 20:43:25,595 - lightrag - INFO - Query edges: Three main components, RAG system (top_k:10, cosine:0.2)
+2026-01-19 20:43:25,623 - lightrag - INFO - Local query: 10 entites, 26 relations
+2026-01-19 20:43:25,623 - lightrag - INFO - Query edges: Vector databases, LightRAG support, Key characteristics (top_k:10, cosine:0.2)
+2026-01-19 20:43:25,650 - lightrag - INFO - Global query: 14 entites, 10 relations
+2026-01-19 20:43:25,651 - lightrag - INFO - Naive query: 5 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:43:25,652 - lightrag - INFO - Raw search results: 18 entities, 20 relations, 5 vector chunks
+2026-01-19 20:43:25,656 - lightrag - INFO - After truncation: 18 entities, 20 relations
+2026-01-19 20:43:25,657 - lightrag - INFO - Selecting 5 from 5 entity-related chunks by vector similarity
+2026-01-19 20:43:25,658 - lightrag - INFO - Find no additional relations-related chunks from 20 relations
+2026-01-19 20:43:25,658 - lightrag - INFO - Round-robin merged chunks: 10 -> 5 (deduplicated 5)
+2026-01-19 20:43:25,662 - lightrag - WARNING - Rerank is enabled but no rerank model is configured. Please set up a rerank model or set enable_rerank=False in query parameters.
+2026-01-19 20:43:25,665 - lightrag - INFO - Final context: 18 entities, 20 relations, 5 chunks
+2026-01-19 20:43:25,665 - lightrag - INFO - Final chunks S+F/O: E3/1 E4/2 E4/3 E5/4 E3/5
+2026-01-19 20:43:25,707 - lightrag - INFO - Global query: 14 entites, 10 relations
+2026-01-19 20:43:25,708 - lightrag - INFO - Naive query: 5 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:43:25,709 - lightrag - INFO - Raw search results: 19 entities, 27 relations, 5 vector chunks
+2026-01-19 20:43:25,716 - lightrag - INFO - After truncation: 19 entities, 27 relations
+2026-01-19 20:43:25,718 - lightrag - INFO - Selecting 3 from 3 entity-related chunks by vector similarity
+2026-01-19 20:43:25,720 - lightrag - INFO - Find no additional relations-related chunks from 27 relations
+2026-01-19 20:43:25,720 - lightrag - INFO - Round-robin merged chunks: 8 -> 5 (deduplicated 3)
+2026-01-19 20:43:25,726 - lightrag - WARNING - Rerank is enabled but no rerank model is configured. Please set up a rerank model or set enable_rerank=False in query parameters.
+2026-01-19 20:43:25,729 - lightrag - INFO - Final context: 19 entities, 27 relations, 5 chunks
+2026-01-19 20:43:25,729 - lightrag - INFO - Final chunks S+F/O: E6/1 C1/2 E5/2 C1/3 E9/3
+2026-01-19 20:43:25,769 - lightrag - INFO - Global query: 14 entites, 10 relations
+2026-01-19 20:43:25,769 - lightrag - INFO - Naive query: 5 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:43:25,770 - lightrag - INFO - Raw search results: 19 entities, 28 relations, 5 vector chunks
+2026-01-19 20:43:25,773 - lightrag - INFO - After truncation: 19 entities, 28 relations
+2026-01-19 20:43:25,773 - lightrag - INFO - Global query: 13 entites, 10 relations
+2026-01-19 20:43:25,774 - lightrag - INFO - Selecting 5 from 5 entity-related chunks by vector similarity
+2026-01-19 20:43:25,775 - lightrag - INFO - Naive query: 5 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:43:25,776 - lightrag - INFO - Raw search results: 21 entities, 28 relations, 5 vector chunks
+2026-01-19 20:43:25,779 - lightrag - INFO - After truncation: 21 entities, 28 relations
+2026-01-19 20:43:25,783 - lightrag - INFO - Find no additional relations-related chunks from 28 relations
+2026-01-19 20:43:25,784 - lightrag - INFO - Round-robin merged chunks: 10 -> 5 (deduplicated 5)
+2026-01-19 20:43:25,788 - lightrag - WARNING - Rerank is enabled but no rerank model is configured. Please set up a rerank model or set enable_rerank=False in query parameters.
+2026-01-19 20:43:25,790 - lightrag - INFO - Final context: 19 entities, 28 relations, 5 chunks
+2026-01-19 20:43:25,790 - lightrag - INFO - Final chunks S+F/O: E6/1 E5/2 E1/3 E2/4 E6/5
+2026-01-19 20:43:25,798 - lightrag - INFO - Selecting 5 from 5 entity-related chunks by vector similarity
+2026-01-19 20:43:25,798 - lightrag - INFO - Find no additional relations-related chunks from 28 relations
+2026-01-19 20:43:25,799 - lightrag - INFO - Round-robin merged chunks: 10 -> 5 (deduplicated 5)
+2026-01-19 20:43:25,803 - lightrag - WARNING - Rerank is enabled but no rerank model is configured. Please set up a rerank model or set enable_rerank=False in query parameters.
+2026-01-19 20:43:25,805 - lightrag - INFO - Final context: 21 entities, 28 relations, 5 chunks
+2026-01-19 20:43:25,805 - lightrag - INFO - Final chunks S+F/O: E12/1 E6/2 E2/3 E1/4 E1/5
+2026-01-19 20:43:41,571 - lightrag - INFO -  == LLM cache == saving: mix:query:18a1edbae785e19c079af0192b05aa84
+2026-01-19 20:43:41,586 - uvicorn.access - INFO - 127.0.0.1:40112 - "POST /query HTTP/1.1" 200
+2026-01-19 20:43:47,732 - lightrag - INFO -  == LLM cache == saving: mix:query:67ad8f13b9eb79865798fe964d9856fe
+2026-01-19 20:43:47,745 - uvicorn.access - INFO - 127.0.0.1:40128 - "POST /query HTTP/1.1" 200
+2026-01-19 20:43:57,513 - lightrag - INFO -  == LLM cache == saving: mix:query:d91a18fb0b6d45cd4387b13f8e16dfd4
+2026-01-19 20:43:57,528 - uvicorn.access - INFO - 127.0.0.1:40138 - "POST /query HTTP/1.1" 200
+2026-01-19 20:44:11,683 - lightrag - INFO -  == LLM cache == saving: mix:query:20a1cb68a42c8d8ec8b721a828485ff7
+2026-01-19 20:44:11,746 - uvicorn.access - INFO - 127.0.0.1:40146 - "POST /query HTTP/1.1" 200
+2026-01-19 20:46:04,894 - lightrag - INFO - Query nodes: System performance, Information retrieval accuracy, Generation coherence, User satisfaction (top_k:10, cosine:0.2)
+2026-01-19 20:46:04,947 - lightrag - INFO - Query nodes: Retrieval-Augmented Generation, Generation enhancement, Document retrieval, System improvement (top_k:10, cosine:0.2)
+2026-01-19 20:46:05,045 - lightrag - INFO - Local query: 10 entites, 21 relations
+2026-01-19 20:46:05,045 - lightrag - INFO - Query edges: Key metrics, Evaluating RAG systems, Quality assessment (top_k:10, cosine:0.2)
+2026-01-19 20:46:05,099 - lightrag - INFO - Local query: 10 entites, 22 relations
+2026-01-19 20:46:05,099 - lightrag - INFO - Query edges: Core benefits, LightRAG, Traditional RAG systems, Improvement (top_k:10, cosine:0.2)
+2026-01-19 20:46:05,162 - lightrag - INFO - Global query: 16 entites, 10 relations
+2026-01-19 20:46:05,163 - lightrag - INFO - Naive query: 5 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:46:05,164 - lightrag - INFO - Raw search results: 23 entities, 28 relations, 5 vector chunks
+2026-01-19 20:46:05,171 - lightrag - INFO - After truncation: 23 entities, 28 relations
+2026-01-19 20:46:05,174 - lightrag - INFO - Selecting 5 from 5 entity-related chunks by vector similarity
+2026-01-19 20:46:05,175 - lightrag - INFO - Find no additional relations-related chunks from 28 relations
+2026-01-19 20:46:05,175 - lightrag - INFO - Round-robin merged chunks: 10 -> 5 (deduplicated 5)
+2026-01-19 20:46:05,184 - lightrag - WARNING - Rerank is enabled but no rerank model is configured. Please set up a rerank model or set enable_rerank=False in query parameters.
+2026-01-19 20:46:05,187 - lightrag - INFO - Final context: 23 entities, 28 relations, 5 chunks
+2026-01-19 20:46:05,187 - lightrag - INFO - Final chunks S+F/O: E5/1 E4/2 E6/3 E2/4 E7/5
+2026-01-19 20:46:05,246 - lightrag - INFO - Global query: 15 entites, 10 relations
+2026-01-19 20:46:05,247 - lightrag - INFO - Naive query: 5 chunks (chunk_top_k:20 cosine:0.2)
+2026-01-19 20:46:05,248 - lightrag - INFO - Raw search results: 24 entities, 31 relations, 5 vector chunks
+2026-01-19 20:46:05,256 - lightrag - INFO - After truncation: 24 entities, 31 relations
+2026-01-19 20:46:05,258 - lightrag - INFO - Selecting 4 from 4 entity-related chunks by vector similarity
+2026-01-19 20:46:05,259 - lightrag - INFO - Find no additional relations-related chunks from 31 relations
+2026-01-19 20:46:05,260 - lightrag - INFO - Round-robin merged chunks: 9 -> 5 (deduplicated 4)
+2026-01-19 20:46:05,265 - lightrag - WARNING - Rerank is enabled but no rerank model is configured. Please set up a rerank model or set enable_rerank=False in query parameters.
+2026-01-19 20:46:05,269 - lightrag - INFO - Final context: 24 entities, 31 relations, 5 chunks
+2026-01-19 20:46:05,269 - lightrag - INFO - Final chunks S+F/O: E5/1 E5/2 C1/3 E7/3 E10/4
+2026-01-19 20:46:47,928 - lightrag - INFO -  == LLM cache == saving: mix:query:cb9ac3c7b3871eb90c0d43611686dc62
+2026-01-19 20:46:47,943 - uvicorn.access - INFO - 127.0.0.1:35222 - "POST /query HTTP/1.1" 200
+2026-01-19 20:46:56,875 - lightrag - INFO -  == LLM cache == saving: mix:query:f04b660a6aa2619bf7fcd4fa2404ae67
+2026-01-19 20:46:56,890 - uvicorn.access - INFO - 127.0.0.1:35238 - "POST /query HTTP/1.1" 200
