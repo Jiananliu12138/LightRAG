@@ -2,9 +2,10 @@ Todo： 1.运行 lightrag-server 以暴露 lightrag-api for evaluation
 pip install -e ".[api]"
 
 lightrag-server \
---host 0.0.0.0\
- --port 8080 \
+ --host 0.0.0.0\
+ --port 9621 \
  --llm-binding ollama \
+ --embedding-binding ollama \
  --ollama-llm-model qwen2.5-7b \
  --ollama-embedding-model nomic-embed
 
