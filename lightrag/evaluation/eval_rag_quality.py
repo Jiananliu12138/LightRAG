@@ -95,8 +95,13 @@ try:
         Faithfulness,
     )
     from ragas.llms import LangchainLLMWrapper
-    from langchain_community.chat_models import ChatOllama
-    from langchain_community.embeddings import OllamaEmbeddings
+    try:
+        # 优先使用新的 langchain-ollama 包
+        from langchain_ollama import ChatOllama, OllamaEmbeddings
+    except ImportError:
+        # 回退到旧的 langchain-community 包
+        from langchain_community.chat_models import ChatOllama
+        from langchain_community.embeddings import OllamaEmbeddings
     from tqdm.auto import tqdm
 
     RAGAS_AVAILABLE = True
@@ -149,10 +154,10 @@ class RAGEvaluator:
         ollama_host = os.getenv("EVAL_OLLAMA_HOST", "http://localhost:11434")
         
         # Configure evaluation LLM (for RAGAS scoring) - using Ollama
-        eval_model = os.getenv("EVAL_LLM_MODEL", "qwen2.5-32b")
+        eval_model = os.getenv("EVAL_LLM_MODEL", "qwen2.5:7b-instruct")
         
         # Configure evaluation embeddings (for RAGAS scoring) - using Ollama
-        eval_embedding_model = os.getenv("EVAL_EMBEDDING_MODEL", "nomic-embed")
+        eval_embedding_model = os.getenv("EVAL_EMBEDDING_MODEL", "nomic-embed-text")
 
         # Create LLM and Embeddings instances for RAGAS using Ollama
         llm_kwargs = {

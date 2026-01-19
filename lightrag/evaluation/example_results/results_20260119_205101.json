@@ -1,0 +1,112 @@
+{
+  "timestamp": "2026-01-19T20:51:01.713631",
+  "total_tests": 6,
+  "elapsed_time_seconds": 457.89,
+  "benchmark_stats": {
+    "total_tests": 6,
+    "successful_tests": 6,
+    "failed_tests": 0,
+    "success_rate": 100.0,
+    "average_metrics": {
+      "faithfulness": 0.7333,
+      "answer_relevance": 0.7897,
+      "context_recall": 0.9667,
+      "context_precision": 0.8333,
+      "ragas_score": 0.8307
+    },
+    "min_ragas_score": 0.686,
+    "max_ragas_score": 0.9674
+  },
+  "results": [
+    {
+      "test_number": 1,
+      "question": "How does LightRAG solve the hallucination problem in large language models?",
+      "answer": "LightRAG addresses the hallucination problem by integrating with external knowledge retrieval systems, thereby grounding the responses of large language models (LLMs) in actual documents. This integra...",
+      "ground_truth": "LightRAG solves the hallucination problem by combining large language models with external knowledge retrieval. The framework ensures accurate responses by grounding LLM outputs in actual documents. L...",
+      "project": "lightrag_evaluation_sample",
+      "metrics": {
+        "faithfulness": 1.0,
+        "answer_relevance": 0.86943089443904,
+        "context_recall": 1.0,
+        "context_precision": 0.9999999999
+      },
+      "timestamp": "2026-01-19T20:46:04.727801",
+      "ragas_score": 0.9674
+    },
+    {
+      "test_number": 2,
+      "question": "What are the three main components required in a RAG system?",
+      "answer": "In a Retrieval-Augmented Generation (RAG) system, there are typically three main components that work together to enable information retrieval and text generation. These components include:\n\n1. **Retr...",
+      "ground_truth": "A RAG system requires three main components: a retrieval system (vector database or search engine) to find relevant documents, an embedding model to convert text into vector representations for simila...",
+      "project": "lightrag_evaluation_sample",
+      "metrics": {
+        "faithfulness": 0.4,
+        "answer_relevance": 0.7630934109756731,
+        "context_recall": 1.0,
+        "context_precision": 0.9999999999
+      },
+      "timestamp": "2026-01-19T20:46:04.300058",
+      "ragas_score": 0.7908
+    },
+    {
+      "test_number": 3,
+      "question": "How does LightRAG's retrieval performance compare to traditional RAG approaches?",
+      "answer": "LightRAG is a model that leverages the strengths of both language models and retrieval-augmented generation (RAG) techniques. When comparing its retrieval performance to traditional RAG approaches, se...",
+      "ground_truth": "LightRAG delivers faster retrieval performance than traditional RAG approaches. The framework optimizes document retrieval operations for speed. Traditional RAG systems often suffer from slow query re...",
+      "project": "lightrag_evaluation_sample",
+      "metrics": {
+        "faithfulness": 1.0,
+        "answer_relevance": 0.7777574817557308,
+        "context_recall": 1.0,
+        "context_precision": 0.9999999999
+      },
+      "timestamp": "2026-01-19T20:48:54.296004",
+      "ragas_score": 0.9444
+    },
+    {
+      "test_number": 4,
+      "question": "What vector databases does LightRAG support and what are their key characteristics?",
+      "answer": "LightRAG, a framework designed for creating large language models (LLMs), is primarily focused on the development of these models rather than specific database technologies. However, in the context of...",
+      "ground_truth": "LightRAG supports multiple vector databases including ChromaDB for simple deployment and efficient similarity search, Neo4j for graph-based knowledge representation with vector capabilities, Milvus fo...",
+      "project": "lightrag_evaluation_sample",
+      "metrics": {
+        "faithfulness": 0.0,
+        "answer_relevance": 0.8537846730780633,
+        "context_recall": 1.0,
+        "context_precision": 0.9999999999
+      },
+      "timestamp": "2026-01-19T20:48:53.867205",
+      "ragas_score": 0.7134
+    },
+    {
+      "test_number": 5,
+      "question": "What are the four key metrics for evaluating RAG system quality and what does each metric measure?",
+      "answer": "When evaluating a Retrieval-Augmented Generation (RAG) system, several key metrics can be used to assess its performance. Here are four important metrics:\n\n1. **Relevance of Retrieved Information**: T...",
+      "ground_truth": "RAG system quality is measured through four key metrics: Faithfulness measures whether answers are factually grounded in retrieved context and detects hallucinations. Answer Relevance measures how wel...",
+      "project": "lightrag_evaluation_sample",
+      "metrics": {
+        "faithfulness": 1.0,
+        "answer_relevance": 0.72996913112559,
+        "context_recall": 0.8,
+        "context_precision": 0.9999999999
+      },
+      "timestamp": "2026-01-19T20:51:01.287485",
+      "ragas_score": 0.8825
+    },
+    {
+      "test_number": 6,
+      "question": "What are the core benefits of LightRAG and how does it improve upon traditional RAG systems?",
+      "answer": "LightRAG is a lightweight, efficient variant of Retrieval-Augmented Generation (RAG) that aims to offer several key benefits over traditional RAG systems. Here are some of its core advantages:\n\n1. **R...",
+      "ground_truth": "LightRAG offers five core benefits: accuracy through document-grounded responses, up-to-date information without model retraining, domain expertise through specialized document collections, cost-effec...",
+      "project": "lightrag_evaluation_sample",
+      "metrics": {
+        "faithfulness": 1.0,
+        "answer_relevance": 0.7440294922245464,
+        "context_recall": 1.0,
+        "context_precision": 0.0
+      },
+      "timestamp": "2026-01-19T20:51:01.711928",
+      "ragas_score": 0.686
+    }
+  ]
+}
