@@ -33,15 +33,25 @@ class OpenAICompatibleEmbeddingConfig:
 
 
 @dataclass(frozen=True)
+class RerankConfig:
+    enabled: bool = False
+    binding: str = "cohere"
+    model: str = "BAAI/bge-reranker-v2-m3"
+    base_url: str = "http://127.0.0.1:8002/rerank"
+    api_key: str = "EMPTY"
+    min_score: float = 0.0
+    enable_chunking: bool = False
+    max_tokens_per_doc: int = 4096
+    extra_body: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class RunConfig:
     input_path: str | None = None
-    text: str | None = (
-        "LightRAG is a graph-based retrieval-augmented generation framework."
-    )
-    input_mode: str = "auto"
     question: str = "What is LightRAG?"
     mode: str = "hybrid"
-    working_dir: str = str(Path(__file__).resolve().parent / "rag_storage")
+    working_dir: str = str(Path(__file__).resolve().parent / "rag_storage"/"2wikimqa")
+    output_path: str = str(Path(__file__).resolve().parent / "query_result.json")
     llm: OpenAICompatibleLLMConfig = field(
         default_factory=lambda: OpenAICompatibleLLMConfig(
             model="Qwen2.5-7B-Instruct",
@@ -55,12 +65,13 @@ class RunConfig:
     embedding: OpenAICompatibleEmbeddingConfig = field(
         default_factory=lambda: OpenAICompatibleEmbeddingConfig(
             model="BAAI/bge-large-en-v1.5",
-            base_url="http://127.0.0.1:8001/v1",
+            base_url="http://127.0.0.1:8003/v1",
             api_key="EMPTY",
             embedding_dim=1024,
             max_token_size=8192,
         )
     )
+    rerank: RerankConfig = field(default_factory=RerankConfig)
 
 
 CONFIG = RunConfig()
@@ -135,15 +146,6 @@ def summarize_custom_chunk_payloads(payloads: list[dict[str, Any]]) -> tuple[int
 
     return payload_count, len(doc_ids), chunk_count
 
-
-def load_text(config: RunConfig) -> str:
-    if config.input_path:
-        return Path(config.input_path).read_text(encoding="utf-8")
-    if config.text:
-        return config.text
-    raise ValueError("Set CONFIG.input_path or CONFIG.text before running the script.")
-
-
 async def local_llm_complete(
     prompt: str,
     system_prompt: str | None = None,
@@ -174,6 +176,53 @@ async def local_llm_complete(
     )
 
 
+def build_rerank_model_func(config: RunConfig):
+    if not config.rerank.enabled:
+        return None
+
+    from lightrag.rerank import ali_rerank, cohere_rerank, jina_rerank
+
+    rerank_functions = {
+        "cohere": cohere_rerank,
+        "jina": jina_rerank,
+        "aliyun": ali_rerank,
+    }
+    selected_rerank_func = rerank_functions.get(config.rerank.binding)
+    if selected_rerank_func is None:
+        raise ValueError(
+            f"Unsupported rerank binding: {config.rerank.binding}. "
+            "Use one of: cohere, jina, aliyun."
+        )
+
+    async def local_rerank(
+        query: str,
+        documents: list[str],
+        top_n: int | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ):
+        merged_extra_body = dict(config.rerank.extra_body)
+        if extra_body:
+            merged_extra_body.update(extra_body)
+
+        request_kwargs: dict[str, Any] = {
+            "query": query,
+            "documents": documents,
+            "top_n": top_n,
+            "api_key": config.rerank.api_key,
+            "model": config.rerank.model,
+            "base_url": config.rerank.base_url,
+            "extra_body": merged_extra_body or None,
+        }
+
+        if config.rerank.binding == "cohere":
+            request_kwargs["enable_chunking"] = config.rerank.enable_chunking
+            request_kwargs["max_tokens_per_doc"] = config.rerank.max_tokens_per_doc
+
+        return await selected_rerank_func(**request_kwargs)
+
+    return local_rerank
+
+
 async def run() -> None:
     from lightrag import LightRAG, QueryParam
     from lightrag.llm.openai import openai_embed
@@ -195,46 +244,54 @@ async def run() -> None:
         model_name=embedding_config.model,
         func=embedding_func_impl,
     )
+    rerank_model_func = build_rerank_model_func(config)
 
     rag = LightRAG(
         working_dir=config.working_dir,
         llm_model_name=config.llm.model,
         llm_model_func=local_llm_complete,
         embedding_func=embedding_func,
+        rerank_model_func=rerank_model_func,
+        min_rerank_score=config.rerank.min_score,
     )
 
     await rag.initialize_storages()
     try:
-        custom_chunk_payloads: list[dict[str, Any]] = []
-        if config.input_mode in {"auto", "custom_chunks"}:
-            custom_chunk_payloads = load_custom_chunk_payloads(config)
-
-        if config.input_mode == "custom_chunks" and not custom_chunk_payloads:
+        custom_chunk_payloads = load_custom_chunk_payloads(config)
+        if not custom_chunk_payloads:
             raise ValueError(
-                "CONFIG.input_mode='custom_chunks' but the input file is not a valid custom chunk JSON/JSONL payload"
+                "CONFIG.input_path must point to a valid custom chunk JSON/JSONL payload file"
             )
 
-        if custom_chunk_payloads:
-            payload_count, doc_count, chunk_count = summarize_custom_chunk_payloads(
-                custom_chunk_payloads
-            )
-            print("\n=== Custom Chunk Import Preview ===")
-            print(f"Input file: {config.input_path}")
-            print(f"Payloads recognized: {payload_count}")
-            print(f"Document IDs recognized: {doc_count}")
-            print(f"Chunks recognized: {chunk_count}")
-            for payload in custom_chunk_payloads:
-                await rag.ainsert_custom_chunks(payload)
-        else:
-            insert_text = load_text(config)
-            await rag.ainsert(insert_text)
-
-        answer = await rag.aquery(
-            config.question,
-            param=QueryParam(mode=config.mode),
+        payload_count, doc_count, chunk_count = summarize_custom_chunk_payloads(
+            custom_chunk_payloads
         )
-        print("\n=== LightRAG Answer ===")
-        print(answer)
+        print("\n=== Custom Chunk Import Preview ===")
+        print(f"Input file: {config.input_path}")
+        print(f"Payloads recognized: {payload_count}")
+        print(f"Document IDs recognized: {doc_count}")
+        print(f"Chunks recognized: {chunk_count}")
+
+        for payload in custom_chunk_payloads:
+            await rag.ainsert_custom_chunks(payload)
+
+        result = await rag.aquery_llm(
+            config.question,
+            param=QueryParam(
+                mode=config.mode,
+                enable_rerank=config.rerank.enabled,
+            ),
+        )
+
+        output_path = Path(config.output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        print("\n=== LightRAG Query Result ===")
+        print(f"Saved to: {output_path}")
     finally:
         await rag.finalize_storages()
 
