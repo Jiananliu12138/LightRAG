@@ -148,6 +148,246 @@ def _chunk_fields_from_status_doc(
     return chunks_list, len(chunks_list)
 
 
+def _normalize_custom_chunk_entry(
+    raw_chunk: Any,
+    index: int,
+    default_doc_id: str | None,
+    default_file_path: str,
+) -> dict[str, Any]:
+    """Normalize a custom chunk entry to the internal chunk schema.
+
+    Supported input formats:
+    - "chunk text"
+    - {"content": "...", "doc_id": "...", "chunk_id": "...", "chunk_order_index": 0}
+    - ["chunk text", "doc_id", "chunk_id", 0, "/path/to/file"]
+    """
+
+    if isinstance(raw_chunk, str):
+        content = raw_chunk
+        chunk_doc_id = default_doc_id
+        chunk_id = None
+        chunk_order_index = index
+        file_path = default_file_path
+    elif isinstance(raw_chunk, dict):
+        content = raw_chunk.get("content", raw_chunk.get("text"))
+        chunk_doc_id = raw_chunk.get(
+            "doc_id", raw_chunk.get("full_doc_id", default_doc_id)
+        )
+        chunk_id = raw_chunk.get("chunk_id", raw_chunk.get("id"))
+        chunk_order_index = raw_chunk.get("chunk_order_index", index)
+        file_path = raw_chunk.get(
+            "file_path", raw_chunk.get("filepath", default_file_path)
+        )
+    elif isinstance(raw_chunk, (list, tuple)):
+        if len(raw_chunk) == 0:
+            raise ValueError("Custom chunk entry cannot be empty")
+        content = raw_chunk[0]
+        chunk_doc_id = default_doc_id
+        if len(raw_chunk) > 1 and raw_chunk[1] not in (None, ""):
+            chunk_doc_id = str(raw_chunk[1])
+        chunk_id = None
+        if len(raw_chunk) > 2 and raw_chunk[2] not in (None, ""):
+            chunk_id = str(raw_chunk[2])
+        chunk_order_index = index
+        if len(raw_chunk) > 3 and raw_chunk[3] not in (None, ""):
+            chunk_order_index = int(raw_chunk[3])
+        file_path = default_file_path
+        if len(raw_chunk) > 4 and raw_chunk[4] not in (None, ""):
+            file_path = str(raw_chunk[4])
+    else:
+        raise TypeError(
+            "Each custom chunk must be a string, dict, list, or tuple entry"
+        )
+
+    if content is None:
+        raise ValueError("Custom chunk content cannot be None")
+
+    content = sanitize_text_for_encoding(str(content))
+    if not content.strip():
+        raise ValueError("Custom chunk content cannot be empty")
+
+    if chunk_doc_id is not None and str(chunk_doc_id).strip() != "":
+        chunk_doc_id = str(chunk_doc_id)
+    else:
+        chunk_doc_id = default_doc_id
+
+    file_path = str(file_path) if file_path not in (None, "") else default_file_path
+    chunk_order_index = int(chunk_order_index)
+    chunk_key = str(chunk_id) if chunk_id not in (None, "") else None
+
+    return {
+        "content": content,
+        "doc_id": chunk_doc_id,
+        "chunk_id": chunk_key,
+        "chunk_order_index": chunk_order_index,
+        "file_path": file_path,
+    }
+
+
+def _make_custom_chunk_storage_key(
+    doc_key: str, chunk_id: str | None, content: str
+) -> str:
+    """Create a stable internal chunk key.
+
+    The user's chunk_id is treated as document-local. Internally we make it
+    unique by namespacing it with doc_key. If no chunk_id is provided, fall
+    back to content hashing.
+    """
+
+    if chunk_id in (None, ""):
+        return compute_mdhash_id(content, prefix="chunk-")
+    return compute_mdhash_id(f"{doc_key}:{chunk_id}", prefix="chunk-")
+
+
+def _normalize_custom_chunks_payload(
+    full_text: str | dict[str, Any],
+    text_chunks: list[Any] | None,
+    doc_id: str | None,
+    file_path: str | None,
+) -> tuple[str, str, str, list[dict[str, Any]]]:
+    """Normalize the custom chunk insert payload.
+
+    Also supports payloads shaped like:
+    {"filepath": "...", "splits": [["chunk text", "doc_id", "chunk_id"], ...]}
+    """
+
+    payload_full_text = full_text
+    payload_chunks = text_chunks
+    payload_doc_id = doc_id
+    payload_file_path = file_path or "unknown_source"
+
+    if isinstance(full_text, dict):
+        payload = full_text
+        payload_full_text = payload.get(
+            "full_text", payload.get("text", payload.get("content"))
+        )
+        payload_chunks = payload.get("splits", text_chunks)
+        payload_doc_id = payload.get(
+            "doc_id", payload.get("full_doc_id", payload_doc_id)
+        )
+        payload_file_path = payload.get(
+            "file_path", payload.get("filepath", payload_file_path)
+        )
+
+    if payload_chunks is None:
+        raise ValueError("Custom chunk insert requires text_chunks or payload['splits']")
+
+    normalized_chunks: list[dict[str, Any]] = []
+    observed_doc_ids: set[str] = set()
+    for index, raw_chunk in enumerate(payload_chunks):
+        normalized_chunk = _normalize_custom_chunk_entry(
+            raw_chunk=raw_chunk,
+            index=index,
+            default_doc_id=payload_doc_id,
+            default_file_path=payload_file_path,
+        )
+        if normalized_chunk["doc_id"] is not None:
+            observed_doc_ids.add(normalized_chunk["doc_id"])
+        normalized_chunks.append(normalized_chunk)
+
+    if payload_doc_id is None:
+        if len(observed_doc_ids) == 1:
+            payload_doc_id = next(iter(observed_doc_ids))
+        elif len(observed_doc_ids) > 1:
+            raise ValueError(
+                "Custom chunk payload contains multiple doc_ids; insert one document at a time"
+            )
+
+    if payload_full_text is None:
+        ordered_chunks = sorted(
+            normalized_chunks, key=lambda chunk: chunk["chunk_order_index"]
+        )
+        payload_full_text = "\n".join(chunk["content"] for chunk in ordered_chunks)
+
+    payload_full_text = sanitize_text_for_encoding(str(payload_full_text))
+    if not payload_full_text.strip():
+        raise ValueError("Full document text cannot be empty")
+
+    doc_key = (
+        str(payload_doc_id)
+        if payload_doc_id not in (None, "")
+        else compute_mdhash_id(payload_full_text, prefix="doc-")
+    )
+
+    if normalized_chunks:
+        payload_file_path = normalized_chunks[0]["file_path"] or payload_file_path
+
+    return payload_full_text, doc_key, payload_file_path, normalized_chunks
+
+
+def _split_custom_chunks_payload_by_doc_id(
+    full_text: str | dict[str, Any],
+    text_chunks: list[Any] | None,
+    doc_id: str | None,
+    file_path: str | None,
+) -> list[dict[str, Any]]:
+    """Split a multi-document custom chunk payload into one payload per doc_id."""
+
+    payload_full_text = full_text
+    payload_chunks = text_chunks
+    payload_doc_id = doc_id
+    payload_file_path = file_path or "unknown_source"
+
+    if isinstance(full_text, dict):
+        payload = full_text
+        payload_full_text = payload.get(
+            "full_text", payload.get("text", payload.get("content"))
+        )
+        payload_chunks = payload.get("splits", text_chunks)
+        payload_doc_id = payload.get(
+            "doc_id", payload.get("full_doc_id", payload_doc_id)
+        )
+        payload_file_path = payload.get(
+            "file_path", payload.get("filepath", payload_file_path)
+        )
+
+    if payload_chunks is None:
+        raise ValueError("Custom chunk insert requires text_chunks or payload['splits']")
+
+    normalized_chunks: list[dict[str, Any]] = []
+    observed_doc_ids: set[str] = set()
+    for index, raw_chunk in enumerate(payload_chunks):
+        normalized_chunk = _normalize_custom_chunk_entry(
+            raw_chunk=raw_chunk,
+            index=index,
+            default_doc_id=payload_doc_id,
+            default_file_path=payload_file_path,
+        )
+        if normalized_chunk["doc_id"] in (None, ""):
+            raise ValueError(
+                "Every custom chunk must have a doc_id when inserting multiple documents"
+            )
+        observed_doc_ids.add(normalized_chunk["doc_id"])
+        normalized_chunks.append(normalized_chunk)
+
+    if len(observed_doc_ids) <= 1:
+        return []
+
+    grouped_payloads: list[dict[str, Any]] = []
+    grouped_chunks: dict[str, list[dict[str, Any]]] = {}
+    for normalized_chunk in normalized_chunks:
+        grouped_chunks.setdefault(normalized_chunk["doc_id"], []).append(
+            normalized_chunk
+        )
+
+    for grouped_doc_id, grouped_doc_chunks in grouped_chunks.items():
+        ordered_chunks = sorted(
+            grouped_doc_chunks, key=lambda chunk: chunk["chunk_order_index"]
+        )
+        grouped_payloads.append(
+            {
+                "doc_id": grouped_doc_id,
+                "file_path": ordered_chunks[0]["file_path"]
+                if ordered_chunks
+                else payload_file_path,
+                "full_text": "\n".join(chunk["content"] for chunk in ordered_chunks),
+                "splits": ordered_chunks,
+            }
+        )
+
+    return grouped_payloads
+
+
 @final
 @dataclass
 class LightRAG:
@@ -1215,74 +1455,244 @@ class LightRAG:
     # TODO: deprecated, use insert instead
     def insert_custom_chunks(
         self,
-        full_text: str,
-        text_chunks: list[str],
-        doc_id: str | list[str] | None = None,
-    ) -> None:
+        full_text: str | dict[str, Any],
+        text_chunks: list[Any] | None = None,
+        doc_id: str | None = None,
+        file_path: str | None = None,
+        track_id: str | None = None,
+    ) -> str:
         loop = always_get_an_event_loop()
-        loop.run_until_complete(
-            self.ainsert_custom_chunks(full_text, text_chunks, doc_id)
+        return loop.run_until_complete(
+            self.ainsert_custom_chunks(
+                full_text,
+                text_chunks,
+                doc_id=doc_id,
+                file_path=file_path,
+                track_id=track_id,
+            )
         )
 
     # TODO: deprecated, use ainsert instead
     async def ainsert_custom_chunks(
-        self, full_text: str, text_chunks: list[str], doc_id: str | None = None
-    ) -> None:
+        self,
+        full_text: str | dict[str, Any],
+        text_chunks: list[Any] | None = None,
+        doc_id: str | None = None,
+        file_path: str | None = None,
+        track_id: str | None = None,
+        current_file_number: int = 1,
+        total_files: int = 1,
+    ) -> str:
         update_storage = False
-        try:
-            # Clean input texts
-            full_text = sanitize_text_for_encoding(full_text)
-            text_chunks = [sanitize_text_for_encoding(chunk) for chunk in text_chunks]
-            file_path = ""
+        doc_key: str | None = None
+        normalized_full_text = ""
+        normalized_file_path = file_path or "unknown_source"
+        inserting_chunks: dict[str, Any] = {}
+        current_time = datetime.now(timezone.utc).isoformat()
+        processing_start_time = int(time.time())
+        pipeline_status = {
+            "latest_message": "",
+            "history_messages": [],
+            "cancellation_requested": False,
+        }
+        pipeline_status_lock = asyncio.Lock()
 
-            # Process cleaned texts
-            if doc_id is None:
-                doc_key = compute_mdhash_id(full_text, prefix="doc-")
-            else:
-                doc_key = doc_id
-            new_docs = {doc_key: {"content": full_text, "file_path": file_path}}
+        try:
+            if track_id is None:
+                track_id = generate_track_id("custom_insert")
+
+            grouped_payloads = _split_custom_chunks_payload_by_doc_id(
+                full_text=full_text,
+                text_chunks=text_chunks,
+                doc_id=doc_id,
+                file_path=file_path,
+            )
+            if grouped_payloads:
+                grouped_total_files = len(grouped_payloads)
+                for grouped_index, grouped_payload in enumerate(
+                    grouped_payloads, start=1
+                ):
+                    await self.ainsert_custom_chunks(
+                        grouped_payload,
+                        track_id=track_id,
+                        current_file_number=grouped_index,
+                        total_files=grouped_total_files,
+                    )
+                return track_id
+
+            (
+                normalized_full_text,
+                doc_key,
+                normalized_file_path,
+                normalized_chunks,
+            ) = _normalize_custom_chunks_payload(
+                full_text=full_text,
+                text_chunks=text_chunks,
+                doc_id=doc_id,
+                file_path=file_path,
+            )
+
+            new_docs = {
+                doc_key: {
+                    "content": normalized_full_text,
+                    "file_path": normalized_file_path,
+                }
+            }
 
             _add_doc_keys = await self.full_docs.filter_keys({doc_key})
             new_docs = {k: v for k, v in new_docs.items() if k in _add_doc_keys}
             if not len(new_docs):
-                logger.warning("This document is already in the storage.")
-                return
+                logger.warning(
+                    "Document already exists in storage: doc_id=%s, file_path=%s",
+                    doc_key,
+                    normalized_file_path,
+                )
+                return track_id
 
             update_storage = True
-            logger.info(f"Inserting {len(new_docs)} docs")
+            logger.info(
+                "Inserting document: doc_id=%s, file_path=%s",
+                doc_key,
+                normalized_file_path,
+            )
 
-            inserting_chunks: dict[str, Any] = {}
-            for index, chunk_text in enumerate(text_chunks):
-                chunk_key = compute_mdhash_id(chunk_text, prefix="chunk-")
+            for normalized_chunk in normalized_chunks:
+                chunk_text = normalized_chunk["content"]
+                chunk_identifier = normalized_chunk["chunk_id"]
+                chunk_key = _make_custom_chunk_storage_key(
+                    doc_key=doc_key,
+                    chunk_id=chunk_identifier,
+                    content=chunk_text,
+                )
+                if chunk_key in inserting_chunks:
+                    raise ValueError(
+                        f"Duplicate custom chunk_id detected in the same document: {chunk_identifier}"
+                    )
                 tokens = len(self.tokenizer.encode(chunk_text))
                 inserting_chunks[chunk_key] = {
                     "content": chunk_text,
                     "full_doc_id": doc_key,
                     "tokens": tokens,
-                    "chunk_order_index": index,
-                    "file_path": file_path,
+                    "chunk_order_index": normalized_chunk["chunk_order_index"],
+                    "file_path": normalized_chunk["file_path"],
+                    "custom_chunk_id": chunk_identifier,
+                    "llm_cache_list": [],
                 }
 
-            doc_ids = set(inserting_chunks.keys())
-            add_chunk_keys = await self.text_chunks.filter_keys(doc_ids)
+            chunk_ids = set(inserting_chunks.keys())
+            add_chunk_keys = await self.text_chunks.filter_keys(chunk_ids)
             inserting_chunks = {
                 k: v for k, v in inserting_chunks.items() if k in add_chunk_keys
             }
             if not len(inserting_chunks):
                 logger.warning("All chunks are already in the storage.")
-                return
+                return track_id
 
-            tasks = [
-                self.chunks_vdb.upsert(inserting_chunks),
-                self._process_extract_entities(inserting_chunks),
+            doc_status_payload = {
+                doc_key: {
+                    "status": DocStatus.PROCESSING,
+                    "content_summary": get_content_summary(normalized_full_text),
+                    "content_length": len(normalized_full_text),
+                    "chunks_count": len(inserting_chunks),
+                    "chunks_list": list(inserting_chunks.keys()),
+                    "created_at": current_time,
+                    "updated_at": current_time,
+                    "file_path": normalized_file_path,
+                    "track_id": track_id,
+                    "metadata": {
+                        "processing_start_time": processing_start_time,
+                        "custom_chunks": True,
+                    },
+                }
+            }
+
+            await asyncio.gather(
                 self.full_docs.upsert(new_docs),
+                self.doc_status.upsert(doc_status_payload),
+                self.chunks_vdb.upsert(inserting_chunks),
                 self.text_chunks.upsert(inserting_chunks),
-            ]
-            await asyncio.gather(*tasks)
+            )
+
+            chunk_results = await self._process_extract_entities(
+                inserting_chunks,
+                pipeline_status=pipeline_status,
+                pipeline_status_lock=pipeline_status_lock,
+            )
+
+            await merge_nodes_and_edges(
+                chunk_results=chunk_results,
+                knowledge_graph_inst=self.chunk_entity_relation_graph,
+                entity_vdb=self.entities_vdb,
+                relationships_vdb=self.relationships_vdb,
+                global_config=asdict(self),
+                full_entities_storage=self.full_entities,
+                full_relations_storage=self.full_relations,
+                doc_id=doc_key,
+                pipeline_status=pipeline_status,
+                pipeline_status_lock=pipeline_status_lock,
+                llm_response_cache=self.llm_response_cache,
+                entity_chunks_storage=self.entity_chunks,
+                relation_chunks_storage=self.relation_chunks,
+                current_file_number=current_file_number,
+                total_files=total_files,
+                file_path=normalized_file_path,
+            )
+
+            processing_end_time = int(time.time())
+            await self.doc_status.upsert(
+                {
+                    doc_key: {
+                        "status": DocStatus.PROCESSED,
+                        "content_summary": get_content_summary(normalized_full_text),
+                        "content_length": len(normalized_full_text),
+                        "chunks_count": len(inserting_chunks),
+                        "chunks_list": list(inserting_chunks.keys()),
+                        "created_at": current_time,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "file_path": normalized_file_path,
+                        "track_id": track_id,
+                        "metadata": {
+                            "processing_start_time": processing_start_time,
+                            "processing_end_time": processing_end_time,
+                            "custom_chunks": True,
+                        },
+                    }
+                }
+            )
+            return track_id
+
+        except Exception as e:
+            if update_storage and doc_key is not None:
+                processing_end_time = int(time.time())
+                await self.doc_status.upsert(
+                    {
+                        doc_key: {
+                            "status": DocStatus.FAILED,
+                            "error_msg": str(e),
+                            "content_summary": get_content_summary(normalized_full_text),
+                            "content_length": len(normalized_full_text),
+                            "chunks_count": len(inserting_chunks),
+                            "chunks_list": list(inserting_chunks.keys()),
+                            "created_at": current_time,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                            "file_path": normalized_file_path,
+                            "track_id": track_id or "",
+                            "metadata": {
+                                "processing_start_time": processing_start_time,
+                                "processing_end_time": processing_end_time,
+                                "custom_chunks": True,
+                            },
+                        }
+                    }
+                )
+            raise
 
         finally:
             if update_storage:
-                await self._insert_done()
+                await self._insert_done(
+                    pipeline_status=pipeline_status,
+                    pipeline_status_lock=pipeline_status_lock,
+                )
 
     async def apipeline_enqueue_documents(
         self,

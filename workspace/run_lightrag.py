@@ -1,0 +1,243 @@
+import asyncio
+import json
+import sys
+from dataclasses import dataclass, field
+from functools import partial
+from pathlib import Path
+from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+@dataclass(frozen=True)
+class OpenAICompatibleLLMConfig:
+    model: str
+    base_url: str
+    api_key: str = "EMPTY"
+    timeout: int = 120
+    temperature: float | None = 0.2
+    max_tokens: int | None = 4096
+    extra_body: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class OpenAICompatibleEmbeddingConfig:
+    model: str
+    base_url: str
+    api_key: str = "EMPTY"
+    embedding_dim: int = 1024
+    max_token_size: int = 8192
+    timeout: int = 120
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    input_path: str | None = None
+    text: str | None = (
+        "LightRAG is a graph-based retrieval-augmented generation framework."
+    )
+    input_mode: str = "auto"
+    question: str = "What is LightRAG?"
+    mode: str = "hybrid"
+    working_dir: str = str(Path(__file__).resolve().parent / "rag_storage")
+    llm: OpenAICompatibleLLMConfig = field(
+        default_factory=lambda: OpenAICompatibleLLMConfig(
+            model="Qwen2.5-7B-Instruct",
+            base_url="http://127.0.0.1:8005/v1",
+            api_key="EMPTY",
+            temperature=0.2,
+            max_tokens=4096,
+            extra_body={},
+        )
+    )
+    embedding: OpenAICompatibleEmbeddingConfig = field(
+        default_factory=lambda: OpenAICompatibleEmbeddingConfig(
+            model="BAAI/bge-large-en-v1.5",
+            base_url="http://127.0.0.1:8001/v1",
+            api_key="EMPTY",
+            embedding_dim=1024,
+            max_token_size=8192,
+        )
+    )
+
+
+CONFIG = RunConfig()
+
+
+def is_custom_chunk_payload(payload: Any) -> bool:
+    return isinstance(payload, dict) and "splits" in payload
+
+
+def load_custom_chunk_payloads(config: RunConfig) -> list[dict[str, Any]]:
+    if not config.input_path:
+        return []
+
+    input_path = Path(config.input_path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    suffix = input_path.suffix.lower()
+    if suffix == ".jsonl":
+        payloads: list[dict[str, Any]] = []
+        with input_path.open("r", encoding="utf-8") as file:
+            for line_number, raw_line in enumerate(file, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                payload = json.loads(line)
+                if not is_custom_chunk_payload(payload):
+                    raise ValueError(
+                        f"JSONL line {line_number} is not a custom chunk payload with 'splits'"
+                    )
+                payloads.append(payload)
+        return payloads
+
+    if suffix == ".json":
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        if is_custom_chunk_payload(payload):
+            return [payload]
+        if isinstance(payload, list) and all(is_custom_chunk_payload(item) for item in payload):
+            return payload
+        return []
+
+    return []
+
+
+def extract_chunk_doc_id(raw_chunk: Any, default_doc_id: str | None = None) -> str | None:
+    if isinstance(raw_chunk, dict):
+        return raw_chunk.get("doc_id") or raw_chunk.get("full_doc_id") or default_doc_id
+    if isinstance(raw_chunk, (list, tuple)):
+        if len(raw_chunk) > 1 and raw_chunk[1] not in (None, ""):
+            return str(raw_chunk[1])
+        return default_doc_id
+    return default_doc_id
+
+
+def summarize_custom_chunk_payloads(payloads: list[dict[str, Any]]) -> tuple[int, int, int]:
+    payload_count = len(payloads)
+    chunk_count = 0
+    doc_ids: set[str] = set()
+
+    for payload in payloads:
+        payload_doc_id = payload.get("doc_id") or payload.get("full_doc_id")
+        splits = payload.get("splits", [])
+        chunk_count += len(splits)
+
+        if payload_doc_id not in (None, ""):
+            doc_ids.add(str(payload_doc_id))
+
+        for raw_chunk in splits:
+            chunk_doc_id = extract_chunk_doc_id(raw_chunk, payload_doc_id)
+            if chunk_doc_id not in (None, ""):
+                doc_ids.add(str(chunk_doc_id))
+
+    return payload_count, len(doc_ids), chunk_count
+
+
+def load_text(config: RunConfig) -> str:
+    if config.input_path:
+        return Path(config.input_path).read_text(encoding="utf-8")
+    if config.text:
+        return config.text
+    raise ValueError("Set CONFIG.input_path or CONFIG.text before running the script.")
+
+
+async def local_llm_complete(
+    prompt: str,
+    system_prompt: str | None = None,
+    history_messages: list[dict[str, Any]] | None = None,
+    **kwargs: Any,
+) -> str:
+    from lightrag.llm.openai import openai_complete_if_cache
+
+    llm_config = CONFIG.llm
+    request_kwargs: dict[str, Any] = {}
+    if llm_config.temperature is not None:
+        request_kwargs["temperature"] = llm_config.temperature
+    if llm_config.max_tokens is not None:
+        request_kwargs["max_tokens"] = llm_config.max_tokens
+    if llm_config.extra_body:
+        request_kwargs["extra_body"] = llm_config.extra_body
+    request_kwargs.update(kwargs)
+
+    return await openai_complete_if_cache(
+        model=llm_config.model,
+        prompt=prompt,
+        system_prompt=system_prompt,
+        history_messages=history_messages or [],
+        base_url=llm_config.base_url,
+        api_key=llm_config.api_key,
+        timeout=llm_config.timeout,
+        **request_kwargs,
+    )
+
+
+async def run() -> None:
+    from lightrag import LightRAG, QueryParam
+    from lightrag.llm.openai import openai_embed
+    from lightrag.utils import EmbeddingFunc
+
+    config = CONFIG
+    embedding_config = config.embedding
+    embedding_func_impl = partial(
+        openai_embed.func,
+        model=embedding_config.model,
+        base_url=embedding_config.base_url,
+        api_key=embedding_config.api_key,
+        client_configs={"timeout": embedding_config.timeout},
+    )
+
+    embedding_func = EmbeddingFunc(
+        embedding_dim=embedding_config.embedding_dim,
+        max_token_size=embedding_config.max_token_size,
+        model_name=embedding_config.model,
+        func=embedding_func_impl,
+    )
+
+    rag = LightRAG(
+        working_dir=config.working_dir,
+        llm_model_name=config.llm.model,
+        llm_model_func=local_llm_complete,
+        embedding_func=embedding_func,
+    )
+
+    await rag.initialize_storages()
+    try:
+        custom_chunk_payloads: list[dict[str, Any]] = []
+        if config.input_mode in {"auto", "custom_chunks"}:
+            custom_chunk_payloads = load_custom_chunk_payloads(config)
+
+        if config.input_mode == "custom_chunks" and not custom_chunk_payloads:
+            raise ValueError(
+                "CONFIG.input_mode='custom_chunks' but the input file is not a valid custom chunk JSON/JSONL payload"
+            )
+
+        if custom_chunk_payloads:
+            payload_count, doc_count, chunk_count = summarize_custom_chunk_payloads(
+                custom_chunk_payloads
+            )
+            print("\n=== Custom Chunk Import Preview ===")
+            print(f"Input file: {config.input_path}")
+            print(f"Payloads recognized: {payload_count}")
+            print(f"Document IDs recognized: {doc_count}")
+            print(f"Chunks recognized: {chunk_count}")
+            for payload in custom_chunk_payloads:
+                await rag.ainsert_custom_chunks(payload)
+        else:
+            insert_text = load_text(config)
+            await rag.ainsert(insert_text)
+
+        answer = await rag.aquery(
+            config.question,
+            param=QueryParam(mode=config.mode),
+        )
+        print("\n=== LightRAG Answer ===")
+        print(answer)
+    finally:
+        await rag.finalize_storages()
+
+
+if __name__ == "__main__":
+    asyncio.run(run())
