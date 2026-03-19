@@ -24,7 +24,7 @@ class OpenAICompatibleLLMConfig:
     model: str
     base_url: str
     api_key: str = "EMPTY"
-    timeout: int = 120
+    timeout: int = 3600
     temperature: float | None = 0.2
     max_tokens: int | None = 4096
     extra_body: dict[str, Any] = field(default_factory=dict)
@@ -37,7 +37,7 @@ class OpenAICompatibleEmbeddingConfig:
     api_key: str = "EMPTY"
     embedding_dim: int = 1024
     max_token_size: int = 8192
-    timeout: int = 120
+    timeout: int = 3600
 
 
 @dataclass(frozen=True)
@@ -435,6 +435,7 @@ async def run() -> None:
         embedding_func=embedding_func,
         rerank_model_func=rerank_model_func,
         min_rerank_score=config.rerank.min_score,
+        max_parallel_insert=10,
     )
 
     await rag.initialize_storages()
