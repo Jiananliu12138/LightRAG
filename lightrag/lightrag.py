@@ -761,6 +761,10 @@ class LightRAG:
             "cosine_better_than_threshold": self.cosine_better_than_threshold,
             **self.vector_db_storage_cls_kwargs,
         }
+        # Reuse the same document-level parallelism cap for custom chunk inserts.
+        self._custom_chunk_insert_semaphore = asyncio.Semaphore(
+            max(1, self.max_parallel_insert)
+        )
 
         # Init Tokenizer
         # Post-initialization hook to handle backward compatabile tokenizer initialization based on provided parameters
@@ -1496,6 +1500,7 @@ class LightRAG:
             "cancellation_requested": False,
         }
         pipeline_status_lock = asyncio.Lock()
+        semaphore_acquired = False
 
         try:
             if track_id is None:
@@ -1509,16 +1514,23 @@ class LightRAG:
             )
             if grouped_payloads:
                 grouped_total_files = len(grouped_payloads)
-                for grouped_index, grouped_payload in enumerate(
-                    grouped_payloads, start=1
-                ):
-                    await self.ainsert_custom_chunks(
-                        grouped_payload,
-                        track_id=track_id,
-                        current_file_number=grouped_index,
-                        total_files=grouped_total_files,
+                await asyncio.gather(
+                    *(
+                        self.ainsert_custom_chunks(
+                            grouped_payload,
+                            track_id=track_id,
+                            current_file_number=grouped_index,
+                            total_files=grouped_total_files,
+                        )
+                        for grouped_index, grouped_payload in enumerate(
+                            grouped_payloads, start=1
+                        )
                     )
+                )
                 return track_id
+
+            await self._custom_chunk_insert_semaphore.acquire()
+            semaphore_acquired = True
 
             (
                 normalized_full_text,
@@ -1693,6 +1705,8 @@ class LightRAG:
                     pipeline_status=pipeline_status,
                     pipeline_status_lock=pipeline_status_lock,
                 )
+            if semaphore_acquired:
+                self._custom_chunk_insert_semaphore.release()
 
     async def apipeline_enqueue_documents(
         self,
