@@ -64,7 +64,7 @@ class SkippedChunkInfo:
 
 @dataclass(frozen=True)
 class RunConfig:
-    chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/data/test_database/3.9/2wikimqa_lumber_chunk_Qwen2.5-7B-Instruct.jsonl"
+    chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/test_database/3.9/2wikimqa_lumber_chunk_Qwen2.5-7B-Instruct.jsonl"
     query_input_path: str | None = None
     question: str = "Who is George V?"
     mode: str = "hybrid"
@@ -86,7 +86,7 @@ class RunConfig:
             base_url="http://127.0.0.1:8003/v1",
             api_key="EMPTY",
             embedding_dim=1024,
-            max_token_size=512,
+            max_token_size=480,
         )
     )
     rerank: RerankConfig = field(default_factory=RerankConfig)
