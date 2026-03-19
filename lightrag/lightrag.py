@@ -274,31 +274,16 @@ def _normalize_custom_chunks_payload(
 
     normalized_chunks: list[dict[str, Any]] = []
     observed_doc_ids: set[str] = set()
-    skipped_count = 0
     for index, raw_chunk in enumerate(payload_chunks):
-        try:
-            normalized_chunk = _normalize_custom_chunk_entry(
-                raw_chunk=raw_chunk,
-                index=index,
-                default_doc_id=payload_doc_id,
-                default_file_path=payload_file_path,
-            )
-        except (TypeError, ValueError) as exc:
-            skipped_count += 1
-            logger.warning(
-                "Skipping invalid custom chunk at index %d: %s", index, exc
-            )
-            continue
+        normalized_chunk = _normalize_custom_chunk_entry(
+            raw_chunk=raw_chunk,
+            index=index,
+            default_doc_id=payload_doc_id,
+            default_file_path=payload_file_path,
+        )
         if normalized_chunk["doc_id"] is not None:
             observed_doc_ids.add(normalized_chunk["doc_id"])
         normalized_chunks.append(normalized_chunk)
-
-    if skipped_count > 0:
-        logger.info(
-            "Skipped %d invalid chunks out of %d total during normalization",
-            skipped_count,
-            len(payload_chunks),
-        )
 
     if payload_doc_id is None:
         if len(observed_doc_ids) == 1:
@@ -361,34 +346,19 @@ def _split_custom_chunks_payload_by_doc_id(
 
     normalized_chunks: list[dict[str, Any]] = []
     observed_doc_ids: set[str] = set()
-    skipped_count = 0
     for index, raw_chunk in enumerate(payload_chunks):
-        try:
-            normalized_chunk = _normalize_custom_chunk_entry(
-                raw_chunk=raw_chunk,
-                index=index,
-                default_doc_id=payload_doc_id,
-                default_file_path=payload_file_path,
-            )
-        except (TypeError, ValueError) as exc:
-            skipped_count += 1
-            logger.warning(
-                "Skipping invalid custom chunk at index %d: %s", index, exc
-            )
-            continue
+        normalized_chunk = _normalize_custom_chunk_entry(
+            raw_chunk=raw_chunk,
+            index=index,
+            default_doc_id=payload_doc_id,
+            default_file_path=payload_file_path,
+        )
         if normalized_chunk["doc_id"] in (None, ""):
             raise ValueError(
                 "Every custom chunk must have a doc_id when inserting multiple documents"
             )
         observed_doc_ids.add(normalized_chunk["doc_id"])
         normalized_chunks.append(normalized_chunk)
-
-    if skipped_count > 0:
-        logger.info(
-            "Skipped %d invalid chunks out of %d total in payload split",
-            skipped_count,
-            len(payload_chunks),
-        )
 
     if len(observed_doc_ids) <= 1:
         return []

@@ -42,7 +42,7 @@ class OpenAICompatibleEmbeddingConfig:
 
 @dataclass(frozen=True)
 class RerankConfig:
-    enabled: bool = False
+    enabled: bool = True
     binding: str = "cohere"
     model: str = "BAAI/bge-reranker-v2-m3"
     base_url: str = "http://127.0.0.1:8002/rerank"
@@ -64,9 +64,9 @@ class SkippedChunkInfo:
 
 @dataclass(frozen=True)
 class RunConfig:
-    chunk_input_path: str | None = None
+    chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/data/test_database/3.9/2wikimqa_lumber_chunk_Qwen2.5-7B-Instruct.jsonl"
     query_input_path: str | None = None
-    question: str = "What is LightRAG?"
+    question: str = "Who is George V?"
     mode: str = "hybrid"
     working_dir: str = str(WORKING_DIR)
     output_path: str = str(OUTPUT_PATH)
@@ -86,7 +86,7 @@ class RunConfig:
             base_url="http://127.0.0.1:8003/v1",
             api_key="EMPTY",
             embedding_dim=1024,
-            max_token_size=8192,
+            max_token_size=512,
         )
     )
     rerank: RerankConfig = field(default_factory=RerankConfig)
@@ -439,77 +439,30 @@ async def run() -> None:
 
     await rag.initialize_storages()
     try:
-        raw_payloads = load_custom_chunk_payloads(config)
-        raw_chunk_total = sum(len(p.get("splits", [])) for p in raw_payloads)
-
-        print("\n=== Custom Chunk Loading ===")
-        print(f"chunk_input_path: {config.chunk_input_path or '(not set)'}")
-        print(f"Raw payloads loaded: {len(raw_payloads)}")
-        print(f"Raw chunks total: {raw_chunk_total}")
-
-        if raw_payloads and raw_chunk_total > 0:
-            first_split = raw_payloads[0].get("splits", [[]])[0]
-            print(f"First chunk sample (type={type(first_split).__name__}):")
-            if isinstance(first_split, (list, tuple)):
-                print(f"  [0] content ({type(first_split[0]).__name__}): "
-                      f"{repr(str(first_split[0])[:120])}")
-                if len(first_split) > 1:
-                    print(f"  [1] doc_id: {repr(first_split[1])}")
-                if len(first_split) > 2:
-                    print(f"  [2] value: {repr(first_split[2])}")
-            elif isinstance(first_split, dict):
-                for key in ("content", "text", "doc_id", "chunk_id"):
-                    if key in first_split:
-                        val = str(first_split[key])[:120]
-                        print(f"  {key}: {repr(val)}")
-            else:
-                print(f"  value: {repr(str(first_split)[:120])}")
-
+        custom_chunk_payloads = load_custom_chunk_payloads(config)
         custom_chunk_payloads, skipped_chunks = filter_invalid_custom_chunk_payloads(
-            raw_payloads
+            custom_chunk_payloads
         )
-
-        print(f"\nAfter filter: {sum(len(p.get('splits', [])) for p in custom_chunk_payloads)} valid, "
-              f"{len(skipped_chunks)} skipped")
-
         if custom_chunk_payloads:
             payload_count, doc_count, chunk_count = summarize_custom_chunk_payloads(
                 custom_chunk_payloads
             )
             print("\n=== Custom Chunk Import Preview ===")
             print(f"Input file: {config.chunk_input_path}")
-            print(f"Payloads recognized: {payload_count}")
-            print(f"Document IDs recognized: {doc_count}")
-            print(f"Chunks recognized: {chunk_count}")
-            print(f"Chunks skipped: {len(skipped_chunks)}")
+            print(f"Payloads: {payload_count}  Documents: {doc_count}  "
+                  f"Chunks: {chunk_count}  Skipped: {len(skipped_chunks)}")
 
             if skipped_chunks:
-                print("\n=== Skipped Custom Chunks (first 10) ===")
-                for skipped in skipped_chunks[:10]:
+                for skipped in skipped_chunks[:5]:
                     print(
-                        f"  payload={skipped.payload_index} split={skipped.split_index} "
-                        f"doc_id={skipped.doc_id} chunk_id={skipped.chunk_id} "
-                        f"reason={skipped.reason}"
+                        f"  [skipped] split={skipped.split_index} "
+                        f"doc_id={skipped.doc_id} reason={skipped.reason}"
                     )
-                if len(skipped_chunks) > 10:
-                    print(f"  ... and {len(skipped_chunks) - 10} more")
+                if len(skipped_chunks) > 5:
+                    print(f"  ... and {len(skipped_chunks) - 5} more")
 
             for payload in custom_chunk_payloads:
                 await rag.ainsert_custom_chunks(payload)
-        elif skipped_chunks:
-            print("\n=== ALL chunks were filtered out ===")
-            print(f"Chunks skipped: {len(skipped_chunks)}")
-            print("\nFirst 10 skipped chunks:")
-            for skipped in skipped_chunks[:10]:
-                print(
-                    f"  payload={skipped.payload_index} split={skipped.split_index} "
-                    f"doc_id={skipped.doc_id} chunk_id={skipped.chunk_id} "
-                    f"reason={skipped.reason}"
-                )
-            if len(skipped_chunks) > 10:
-                print(f"  ... and {len(skipped_chunks) - 10} more")
-        else:
-            print("\nNo custom chunks to import.")
 
         query_records = load_query_records(config)
         results: list[dict[str, Any]] = []
