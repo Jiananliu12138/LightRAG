@@ -436,6 +436,7 @@ async def run() -> None:
         rerank_model_func=rerank_model_func,
         min_rerank_score=config.rerank.min_score,
         max_parallel_insert=10,
+        default_llm_timeout=config.llm.timeout,
     )
 
     await rag.initialize_storages()
