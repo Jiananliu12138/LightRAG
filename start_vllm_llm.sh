@@ -9,6 +9,7 @@ PORT="8005"
 API_KEY="EMPTY"
 GPU="0"
 DTYPE="auto"
+GPU_MEMORY_UTILIZATION="0.8"
 PYTHON_BIN="python"
 
 export CUDA_VISIBLE_DEVICES="$GPU"
@@ -19,6 +20,7 @@ echo "  model=$MODEL"
 echo "  served_model_name=$SERVED_MODEL_NAME"
 echo "  host=$HOST"
 echo "  port=$PORT"
+echo "  gpu_memory_utilization=$GPU_MEMORY_UTILIZATION"
 
 exec "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
   --model "$MODEL" \
@@ -26,4 +28,5 @@ exec "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
   --port "$PORT" \
   --api-key "$API_KEY" \
   --dtype "$DTYPE" \
+  --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
   --served-model-name "$SERVED_MODEL_NAME"
