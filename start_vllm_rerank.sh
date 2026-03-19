@@ -21,7 +21,8 @@ echo "  host=$HOST"
 echo "  port=$PORT"
 echo "  route=http://$HOST:$PORT/rerank"
 
-exec "$PYTHON_BIN" -m vllm serve "$MODEL" \
+exec "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
+  --model "$MODEL" \
   --host "$HOST" \
   --port "$PORT" \
   --api-key "$API_KEY" \

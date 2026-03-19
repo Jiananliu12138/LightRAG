@@ -21,7 +21,8 @@ echo "  served_model_name=$SERVED_MODEL_NAME"
 echo "  host=$HOST"
 echo "  port=$PORT"
 
-exec "$PYTHON_BIN" -m vllm serve "$MODEL" \
+exec "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
+  --model "$MODEL" \
   --host "$HOST" \
   --port "$PORT" \
   --api-key "$API_KEY" \
