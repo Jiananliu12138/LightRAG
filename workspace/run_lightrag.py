@@ -9,6 +9,12 @@ from typing import Any
 
 os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+WORKING_DIR = Path(__file__).resolve().parent / "rag_storage" / "2wikimqa"
+OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "query_result.json"
+
+WORKING_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -48,16 +54,22 @@ class RerankConfig:
 
 
 @dataclass(frozen=True)
+class SkippedChunkInfo:
+    payload_index: int
+    split_index: int
+    doc_id: str | None
+    chunk_id: str | None
+    reason: str
+
+
+@dataclass(frozen=True)
 class RunConfig:
-    # Legacy alias: if only this is set, the script will auto-detect whether the
-    # file contains custom chunks for import or query/evaluation records.
-    input_path: str | None = None
     chunk_input_path: str | None = None
     query_input_path: str | None = None
     question: str = "What is LightRAG?"
     mode: str = "hybrid"
-    working_dir: str = str(Path(__file__).resolve().parent / "rag_storage"/"2wikimqa")
-    output_path: str = str(Path(__file__).resolve().parent / "query_result.json")
+    working_dir: str = str(WORKING_DIR)
+    output_path: str = str(OUTPUT_PATH)
     llm: OpenAICompatibleLLMConfig = field(
         default_factory=lambda: OpenAICompatibleLLMConfig(
             model="Qwen2.5-7B-Instruct",
@@ -112,7 +124,7 @@ def load_json_items(input_path: Path) -> list[Any]:
 
 
 def load_custom_chunk_payloads(config: RunConfig) -> list[dict[str, Any]]:
-    chunk_input = config.chunk_input_path or config.input_path
+    chunk_input = config.chunk_input_path
     if not chunk_input:
         return []
 
@@ -124,11 +136,9 @@ def load_custom_chunk_payloads(config: RunConfig) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
     for line_number, item in enumerate(items, start=1):
         if not is_custom_chunk_payload(item):
-            if config.chunk_input_path:
-                raise ValueError(
-                    f"Input item {line_number} is not a custom chunk payload with 'splits'"
-                )
-            return []
+            raise ValueError(
+                f"Input item {line_number} is not a custom chunk payload with 'splits'"
+            )
         payloads.append(item)
 
     return payloads
@@ -166,9 +176,6 @@ def normalize_query_record(record: dict[str, Any]) -> dict[str, Any]:
 
 def load_query_records(config: RunConfig) -> list[dict[str, Any]]:
     query_input = config.query_input_path
-    query_input_explicit = config.query_input_path is not None
-    if not query_input and config.input_path and not config.chunk_input_path:
-        query_input = config.input_path
 
     if not query_input:
         return [
@@ -183,15 +190,6 @@ def load_query_records(config: RunConfig) -> list[dict[str, Any]]:
     items = load_json_items(input_path)
     if not items:
         raise ValueError(f"No query records found in {input_path}")
-
-    if not query_input_explicit and all(is_custom_chunk_payload(item) for item in items):
-        return [
-            {
-                "user_input": config.question,
-                "reference": None,
-                "meta": {},
-            }
-        ]
 
     records: list[dict[str, Any]] = []
     for item in items:
@@ -246,6 +244,68 @@ def extract_chunk_doc_id(raw_chunk: Any, default_doc_id: str | None = None) -> s
             return str(raw_chunk[1])
         return default_doc_id
     return default_doc_id
+
+
+def extract_chunk_id(raw_chunk: Any) -> str | None:
+    if isinstance(raw_chunk, dict):
+        chunk_id = raw_chunk.get("chunk_id", raw_chunk.get("id"))
+        if chunk_id not in (None, ""):
+            return str(chunk_id)
+        return None
+    if isinstance(raw_chunk, (list, tuple)):
+        if len(raw_chunk) > 2 and raw_chunk[2] not in (None, ""):
+            return str(raw_chunk[2])
+        return None
+    return None
+
+
+def filter_invalid_custom_chunk_payloads(
+    payloads: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[SkippedChunkInfo]]:
+    from lightrag.lightrag import _normalize_custom_chunk_entry
+
+    filtered_payloads: list[dict[str, Any]] = []
+    skipped_chunks: list[SkippedChunkInfo] = []
+
+    for payload_index, payload in enumerate(payloads, start=1):
+        payload_doc_id = payload.get("doc_id", payload.get("full_doc_id"))
+        payload_file_path = payload.get(
+            "file_path", payload.get("filepath", "unknown_source")
+        )
+        splits = payload.get("splits", [])
+        valid_splits: list[Any] = []
+
+        for split_index, raw_chunk in enumerate(splits, start=1):
+            doc_id = extract_chunk_doc_id(raw_chunk, payload_doc_id)
+            chunk_id = extract_chunk_id(raw_chunk)
+
+            try:
+                _normalize_custom_chunk_entry(
+                    raw_chunk=raw_chunk,
+                    index=split_index - 1,
+                    default_doc_id=payload_doc_id,
+                    default_file_path=payload_file_path,
+                )
+            except (TypeError, ValueError) as exc:
+                skipped_chunks.append(
+                    SkippedChunkInfo(
+                        payload_index=payload_index,
+                        split_index=split_index,
+                        doc_id=doc_id,
+                        chunk_id=chunk_id,
+                        reason=str(exc),
+                    )
+                )
+                continue
+
+            valid_splits.append(raw_chunk)
+
+        if valid_splits:
+            filtered_payload = dict(payload)
+            filtered_payload["splits"] = valid_splits
+            filtered_payloads.append(filtered_payload)
+
+    return filtered_payloads, skipped_chunks
 
 
 def summarize_custom_chunk_payloads(payloads: list[dict[str, Any]]) -> tuple[int, int, int]:
@@ -380,20 +440,48 @@ async def run() -> None:
     await rag.initialize_storages()
     try:
         custom_chunk_payloads = load_custom_chunk_payloads(config)
+        custom_chunk_payloads, skipped_chunks = filter_invalid_custom_chunk_payloads(
+            custom_chunk_payloads
+        )
         if custom_chunk_payloads:
             payload_count, doc_count, chunk_count = summarize_custom_chunk_payloads(
                 custom_chunk_payloads
             )
             print("\n=== Custom Chunk Import Preview ===")
             print(
-                f"Input file: {config.chunk_input_path or config.input_path}"
+                f"Input file: {config.chunk_input_path}"
             )
             print(f"Payloads recognized: {payload_count}")
             print(f"Document IDs recognized: {doc_count}")
             print(f"Chunks recognized: {chunk_count}")
+            print(f"Chunks skipped: {len(skipped_chunks)}")
+
+            if skipped_chunks:
+                print("\n=== Skipped Custom Chunks ===")
+                for skipped in skipped_chunks:
+                    print(
+                        "payload_index="
+                        f"{skipped.payload_index} split_index={skipped.split_index} "
+                        f"doc_id={skipped.doc_id} chunk_id={skipped.chunk_id} "
+                        f"reason={skipped.reason}"
+                    )
 
             for payload in custom_chunk_payloads:
                 await rag.ainsert_custom_chunks(payload)
+        elif skipped_chunks:
+            print("\n=== Custom Chunk Import Preview ===")
+            print(
+                "No valid custom chunks remain after filtering. "
+                f"Chunks skipped: {len(skipped_chunks)}"
+            )
+            print("\n=== Skipped Custom Chunks ===")
+            for skipped in skipped_chunks:
+                print(
+                    "payload_index="
+                    f"{skipped.payload_index} split_index={skipped.split_index} "
+                    f"doc_id={skipped.doc_id} chunk_id={skipped.chunk_id} "
+                    f"reason={skipped.reason}"
+                )
 
         query_records = load_query_records(config)
         results: list[dict[str, Any]] = []
@@ -401,6 +489,13 @@ async def run() -> None:
         print("\n=== Query Execution Preview ===")
         print(f"Query count: {len(query_records)}")
         print(f"Mode: {config.mode}")
+        if config.query_input_path:
+            print(
+                "Question source: query_input_path "
+                f"({config.query_input_path}); question is ignored when a query file is set"
+            )
+        else:
+            print("Question source: question")
 
         for index, query_record in enumerate(query_records, start=1):
             print(f"Running query {index}/{len(query_records)}")
@@ -439,7 +534,6 @@ async def run() -> None:
             results.append(build_output_record(query_record, result))
 
         output_path = Path(config.output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_payload: dict[str, Any] | list[dict[str, Any]]
         output_payload = results[0] if len(results) == 1 else results
         output_path.write_text(

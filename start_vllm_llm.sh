@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # Edit these values directly for your machine.
-MODEL="/data/h50056789/Rag_chunk_bench/model/Qwen/Qwen2.5-7B-Instruct"
+MODEL="/data/h50056789/Rag_Chunking/model/Qwen/Qwen2.5-7B-Instruct"
 SERVED_MODEL_NAME="Qwen2.5-7B-Instruct"
 HOST="127.0.0.1"
 PORT="8005"
 API_KEY="EMPTY"
 GPU="0"
 DTYPE="auto"
-GPU_MEMORY_UTILIZATION="0.8"
+GPU_MEMORY_UTILIZATION="0.5"
 PYTHON_BIN="python"
 
 export CUDA_VISIBLE_DEVICES="$GPU"

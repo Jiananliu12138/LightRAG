@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Edit these values directly for your machine.
-MODEL="/data/h50056789/Rag_chunk_bench/model/BAAI/bge-reranker-v2-m3"
+MODEL="/data/h50056789/Rag_Chunking/model/BAAI/bge-reranker-v2-m3"
 SERVED_MODEL_NAME="BAAI/bge-reranker-v2-m3"
 HOST="127.0.0.1"
 PORT="8002"
