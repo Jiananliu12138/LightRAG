@@ -10,7 +10,7 @@ from typing import Any
 os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKING_DIR = Path(__file__).resolve().parent / "rag_storage" / "2wikimqa"
-OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "query_result.json"
+OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "query_result"
 
 WORKING_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
