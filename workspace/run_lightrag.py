@@ -104,23 +104,16 @@ def load_json_items(input_path: Path) -> list[Any]:
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     suffix = input_path.suffix.lower()
-    if suffix == ".jsonl":
-        items: list[Any] = []
-        with input_path.open("r", encoding="utf-8") as file:
-            for raw_line in file:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                items.append(json.loads(line))
-        return items
+    if suffix != ".json":
+        raise ValueError(
+            f"Unsupported input file type: {input_path.suffix}. Only .json is supported."
+        )
 
-    if suffix == ".json":
-        payload = json.loads(input_path.read_text(encoding="utf-8"))
-        if isinstance(payload, list):
-            return payload
-        return [payload]
+    payload = json.loads(input_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("Input JSON must contain a top-level array of payload objects")
 
-    raise ValueError(f"Unsupported input file type: {input_path.suffix}")
+    return payload
 
 
 def load_custom_chunk_payloads(config: RunConfig) -> list[dict[str, Any]]:

@@ -7,7 +7,7 @@ consistency and makes maintenance easier.
 """
 
 # Default values for server settings
-DEFAULT_WOKERS = 2
+DEFAULT_WOKERS = 10
 DEFAULT_MAX_GRAPH_NODES = 1000
 
 # Default values for extraction settings
@@ -86,19 +86,19 @@ DEFAULT_FILE_PATH_MORE_PLACEHOLDER = "truncated"
 DEFAULT_TEMPERATURE = 1.0
 
 # Async configuration defaults
-DEFAULT_MAX_ASYNC = 4  # Default maximum async operations
-DEFAULT_MAX_PARALLEL_INSERT = 2  # Default maximum parallel insert operations
+DEFAULT_MAX_ASYNC = 10  # Default maximum async operations
+DEFAULT_MAX_PARALLEL_INSERT = 10  # Default maximum parallel insert operations
 
 # Embedding configuration defaults
 DEFAULT_EMBEDDING_FUNC_MAX_ASYNC = 8  # Default max async for embedding functions
 DEFAULT_EMBEDDING_BATCH_NUM = 10  # Default batch size for embedding computations
 
 # Gunicorn worker timeout
-DEFAULT_TIMEOUT = 300
+DEFAULT_TIMEOUT = 3600
 
 # Default llm and embedding timeout
-DEFAULT_LLM_TIMEOUT = 180
-DEFAULT_EMBEDDING_TIMEOUT = 30
+DEFAULT_LLM_TIMEOUT = 3600
+DEFAULT_EMBEDDING_TIMEOUT = 3600
 
 # Logging configuration defaults
 DEFAULT_LOG_MAX_BYTES = 10485760  # Default 10MB
