@@ -229,6 +229,55 @@ async def test_merge_failure_preserves_chunks_and_skip_cache_cleanup_when_disabl
 
 
 @pytest.mark.asyncio
+async def test_custom_chunk_retry_does_not_skip_failed_existing_doc(
+    tmp_path, monkeypatch
+):
+    rag = await _build_rag(
+        tmp_path, "custom_chunk_retry_existing_doc", _deterministic_chunking
+    )
+    try:
+        payload = {
+            "doc_id": "custom-retry-doc",
+            "file_path": "custom_retry.txt",
+            "splits": [
+                {"content": "alpha chunk", "chunk_id": "chunk-a"},
+                {"content": "beta chunk", "chunk_id": "chunk-b"},
+            ],
+        }
+
+        async def ok_extract(self, chunks, pipeline_status, pipeline_status_lock):
+            return {"chunk_count": len(chunks)}
+
+        async def fail_merge(**kwargs):
+            raise RuntimeError("custom merge fail sentinel")
+
+        async def noop_merge(**kwargs):
+            return None
+
+        rag._process_extract_entities = MethodType(ok_extract, rag)
+        monkeypatch.setattr(lightrag_module, "merge_nodes_and_edges", fail_merge)
+
+        with pytest.raises(RuntimeError, match="custom merge fail sentinel"):
+            await rag.ainsert_custom_chunks(payload)
+
+        failed_status = await rag.doc_status.get_by_id(payload["doc_id"])
+        assert failed_status is not None
+        assert _status_to_text(failed_status["status"]) == "failed"
+        assert await rag.full_docs.get_by_id(payload["doc_id"]) is not None
+
+        monkeypatch.setattr(lightrag_module, "merge_nodes_and_edges", noop_merge)
+        await rag.ainsert_custom_chunks(payload)
+
+        retried_status = await rag.doc_status.get_by_id(payload["doc_id"])
+        assert retried_status is not None
+        assert _status_to_text(retried_status["status"]) == "processed"
+        assert retried_status.get("chunks_count") == 2
+        assert len(retried_status.get("chunks_list", [])) == 2
+    finally:
+        await rag.finalize_storages()
+
+
+@pytest.mark.asyncio
 async def test_validate_and_fix_consistency_preserves_chunks_on_reset(tmp_path):
     rag = await _build_rag(tmp_path, "reset_preserve_chunks", _deterministic_chunking)
     try:

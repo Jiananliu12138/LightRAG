@@ -1544,6 +1544,23 @@ class LightRAG:
                 file_path=file_path,
             )
 
+            existing_doc_status = await self.doc_status.get_by_id(doc_key)
+            existing_status: DocStatus | Any | None = None
+            should_retry_existing_doc = False
+            if existing_doc_status and isinstance(existing_doc_status, dict):
+                raw_existing_status = existing_doc_status.get("status")
+                existing_status = raw_existing_status
+                if not isinstance(existing_status, DocStatus):
+                    try:
+                        existing_status = DocStatus(raw_existing_status)
+                    except ValueError:
+                        existing_status = raw_existing_status
+
+                should_retry_existing_doc = existing_status in {
+                    DocStatus.PROCESSING,
+                    DocStatus.FAILED,
+                }
+
             new_docs = {
                 doc_key: {
                     "content": normalized_full_text,
@@ -1553,13 +1570,28 @@ class LightRAG:
 
             _add_doc_keys = await self.full_docs.filter_keys({doc_key})
             new_docs = {k: v for k, v in new_docs.items() if k in _add_doc_keys}
-            if not len(new_docs):
+            if not len(new_docs) and not should_retry_existing_doc:
                 logger.warning(
                     "Document already exists in storage: doc_id=%s, file_path=%s",
                     doc_key,
                     normalized_file_path,
                 )
                 return track_id
+            if should_retry_existing_doc:
+                logger.warning(
+                    "Retrying custom chunk document after %s state: doc_id=%s, file_path=%s",
+                    existing_status.value
+                    if isinstance(existing_status, DocStatus)
+                    else str(existing_status),
+                    doc_key,
+                    normalized_file_path,
+                )
+                new_docs = {
+                    doc_key: {
+                        "content": normalized_full_text,
+                        "file_path": normalized_file_path,
+                    }
+                }
 
             update_storage = True
             logger.info(
@@ -1592,13 +1624,18 @@ class LightRAG:
                 }
 
             chunk_ids = set(inserting_chunks.keys())
-            add_chunk_keys = await self.text_chunks.filter_keys(chunk_ids)
-            inserting_chunks = {
-                k: v for k, v in inserting_chunks.items() if k in add_chunk_keys
-            }
+            if not should_retry_existing_doc:
+                add_chunk_keys = await self.text_chunks.filter_keys(chunk_ids)
+                inserting_chunks = {
+                    k: v for k, v in inserting_chunks.items() if k in add_chunk_keys
+                }
             if not len(inserting_chunks):
                 logger.warning("All chunks are already in the storage.")
                 return track_id
+
+            created_at = current_time
+            if isinstance(existing_doc_status, dict):
+                created_at = existing_doc_status.get("created_at", current_time)
 
             doc_status_payload = {
                 doc_key: {
@@ -1607,10 +1644,11 @@ class LightRAG:
                     "content_length": len(normalized_full_text),
                     "chunks_count": len(inserting_chunks),
                     "chunks_list": list(inserting_chunks.keys()),
-                    "created_at": current_time,
+                    "created_at": created_at,
                     "updated_at": current_time,
                     "file_path": normalized_file_path,
                     "track_id": track_id,
+                    "error_msg": "",
                     "metadata": {
                         "processing_start_time": processing_start_time,
                         "custom_chunks": True,
