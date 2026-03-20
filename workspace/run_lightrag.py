@@ -110,10 +110,14 @@ def load_json_items(input_path: Path) -> list[Any]:
         )
 
     payload = json.loads(input_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise ValueError("Input JSON must contain a top-level array of payload objects")
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return [payload]
 
-    return payload
+    raise ValueError(
+        "Input JSON must contain either a payload object or a top-level array of payload objects"
+    )
 
 
 def load_custom_chunk_payloads(config: RunConfig) -> list[dict[str, Any]]:
