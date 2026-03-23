@@ -49,7 +49,7 @@ class RerankConfig:
     api_key: str = "EMPTY"
     min_score: float = 0.0
     enable_chunking: bool = False
-    max_tokens_per_doc: int = 4096
+    max_tokens_per_doc: int = 8192
     extra_body: dict[str, Any] = field(default_factory=dict)
 
 

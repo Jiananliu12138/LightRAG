@@ -388,6 +388,95 @@ def _split_custom_chunks_payload_by_doc_id(
     return grouped_payloads
 
 
+def _coerce_retry_history(metadata: Any) -> list[dict[str, Any]]:
+    """Return a sanitized retry history list from stored metadata."""
+
+    if not isinstance(metadata, dict):
+        return []
+
+    history = metadata.get("retry_history", [])
+    if not isinstance(history, list):
+        return []
+
+    return [dict(item) for item in history if isinstance(item, dict)]
+
+
+def _prepare_custom_chunk_retry_metadata(
+    existing_doc_status: dict[str, Any] | None,
+    *,
+    should_retry_existing_doc: bool,
+    existing_status: DocStatus | Any | None,
+    track_id: str,
+    current_time: str,
+    processing_start_time: int,
+    current_chunks_list: list[str],
+) -> dict[str, Any]:
+    """Build persisted metadata for custom chunk attempts and retries."""
+
+    existing_metadata = (
+        dict(existing_doc_status.get("metadata", {}))
+        if isinstance(existing_doc_status, dict)
+        and isinstance(existing_doc_status.get("metadata"), dict)
+        else {}
+    )
+
+    retry_history = _coerce_retry_history(existing_metadata)
+
+    raw_attempt_count = existing_metadata.get("attempt_count", 0)
+    try:
+        previous_attempt_count = int(raw_attempt_count)
+    except (TypeError, ValueError):
+        previous_attempt_count = 0
+
+    if previous_attempt_count < 0:
+        previous_attempt_count = 0
+
+    attempt_count = (
+        previous_attempt_count + 1 if should_retry_existing_doc else max(previous_attempt_count, 1)
+    )
+
+    metadata = dict(existing_metadata)
+    metadata["custom_chunks"] = True
+    metadata["attempt_count"] = attempt_count
+    metadata["retry_count"] = max(attempt_count - 1, 0)
+    metadata["processing_start_time"] = processing_start_time
+    metadata.pop("processing_end_time", None)
+
+    if should_retry_existing_doc:
+        retry_history.append(
+            {
+                "attempt_number": attempt_count,
+                "retry_started_at": current_time,
+                "previous_status": (
+                    existing_status.value
+                    if isinstance(existing_status, DocStatus)
+                    else str(existing_status)
+                ),
+                "previous_track_id": (
+                    existing_doc_status.get("track_id", "")
+                    if isinstance(existing_doc_status, dict)
+                    else ""
+                ),
+                "previous_chunks_list": (
+                    list(existing_doc_status.get("chunks_list", []))
+                    if isinstance(existing_doc_status, dict)
+                    and isinstance(existing_doc_status.get("chunks_list"), list)
+                    else []
+                ),
+                "previous_error_msg": (
+                    existing_doc_status.get("error_msg", "")
+                    if isinstance(existing_doc_status, dict)
+                    else ""
+                ),
+                "retry_track_id": track_id,
+                "retry_chunks_list": current_chunks_list,
+            }
+        )
+
+    metadata["retry_history"] = retry_history
+    return metadata
+
+
 @final
 @dataclass
 class LightRAG:
@@ -1492,6 +1581,7 @@ class LightRAG:
         normalized_full_text = ""
         normalized_file_path = file_path or "unknown_source"
         inserting_chunks: dict[str, Any] = {}
+        custom_chunk_metadata: dict[str, Any] = {}
         current_time = datetime.now(timezone.utc).isoformat()
         processing_start_time = int(time.time())
         pipeline_status = {
@@ -1637,22 +1727,30 @@ class LightRAG:
             if isinstance(existing_doc_status, dict):
                 created_at = existing_doc_status.get("created_at", current_time)
 
+            current_chunks_list = list(inserting_chunks.keys())
+            custom_chunk_metadata = _prepare_custom_chunk_retry_metadata(
+                existing_doc_status if isinstance(existing_doc_status, dict) else None,
+                should_retry_existing_doc=should_retry_existing_doc,
+                existing_status=existing_status,
+                track_id=track_id,
+                current_time=current_time,
+                processing_start_time=processing_start_time,
+                current_chunks_list=current_chunks_list,
+            )
+
             doc_status_payload = {
                 doc_key: {
                     "status": DocStatus.PROCESSING,
                     "content_summary": get_content_summary(normalized_full_text),
                     "content_length": len(normalized_full_text),
                     "chunks_count": len(inserting_chunks),
-                    "chunks_list": list(inserting_chunks.keys()),
+                    "chunks_list": current_chunks_list,
                     "created_at": created_at,
                     "updated_at": current_time,
                     "file_path": normalized_file_path,
                     "track_id": track_id,
                     "error_msg": "",
-                    "metadata": {
-                        "processing_start_time": processing_start_time,
-                        "custom_chunks": True,
-                    },
+                    "metadata": custom_chunk_metadata,
                 }
             }
 
@@ -1689,6 +1787,8 @@ class LightRAG:
             )
 
             processing_end_time = int(time.time())
+            success_metadata = dict(custom_chunk_metadata)
+            success_metadata["processing_end_time"] = processing_end_time
             await self.doc_status.upsert(
                 {
                     doc_key: {
@@ -1696,16 +1796,12 @@ class LightRAG:
                         "content_summary": get_content_summary(normalized_full_text),
                         "content_length": len(normalized_full_text),
                         "chunks_count": len(inserting_chunks),
-                        "chunks_list": list(inserting_chunks.keys()),
+                        "chunks_list": current_chunks_list,
                         "created_at": current_time,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                         "file_path": normalized_file_path,
                         "track_id": track_id,
-                        "metadata": {
-                            "processing_start_time": processing_start_time,
-                            "processing_end_time": processing_end_time,
-                            "custom_chunks": True,
-                        },
+                        "metadata": success_metadata,
                     }
                 }
             )
@@ -1714,6 +1810,8 @@ class LightRAG:
         except Exception as e:
             if update_storage and doc_key is not None:
                 processing_end_time = int(time.time())
+                failed_metadata = dict(custom_chunk_metadata)
+                failed_metadata["processing_end_time"] = processing_end_time
                 await self.doc_status.upsert(
                     {
                         doc_key: {
@@ -1727,11 +1825,7 @@ class LightRAG:
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                             "file_path": normalized_file_path,
                             "track_id": track_id or "",
-                            "metadata": {
-                                "processing_start_time": processing_start_time,
-                                "processing_end_time": processing_end_time,
-                                "custom_chunks": True,
-                            },
+                            "metadata": failed_metadata,
                         }
                     }
                 )

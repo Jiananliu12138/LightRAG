@@ -1,11 +1,15 @@
 import asyncio
+import base64
 import json
 import sys
 import os
 from dataclasses import dataclass, field
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any
+import numpy as np
+from openai import APIConnectionError, APITimeoutError, RateLimitError
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -49,7 +53,7 @@ class RerankConfig:
     api_key: str = "EMPTY"
     min_score: float = 0.0
     enable_chunking: bool = False
-    max_tokens_per_doc: int = 4096
+    max_tokens_per_doc: int = 8192
     extra_body: dict[str, Any] = field(default_factory=dict)
 
 
@@ -82,11 +86,11 @@ class RunConfig:
     )
     embedding: OpenAICompatibleEmbeddingConfig = field(
         default_factory=lambda: OpenAICompatibleEmbeddingConfig(
-            model="BAAI/bge-large-en-v1.5",
+            model="BAAI/bge-m3",
             base_url="http://127.0.0.1:8003/v1",
             api_key="EMPTY",
             embedding_dim=1024,
-            max_token_size=480,
+            max_token_size=8192,
         )
     )
     rerank: RerankConfig = field(default_factory=RerankConfig)
@@ -325,6 +329,192 @@ def summarize_custom_chunk_payloads(payloads: list[dict[str, Any]]) -> tuple[int
 
     return payload_count, len(doc_ids), chunk_count
 
+
+@lru_cache(maxsize=4)
+def get_embedding_hf_tokenizer(model_name: str):
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    if not getattr(tokenizer, "is_fast", False):
+        raise ValueError(
+            f"Tokenizer for {model_name} must be a fast tokenizer to provide offset mappings."
+        )
+    return tokenizer
+
+
+def count_text_tokens(
+    content: str,
+    tokenizer: Any,
+) -> int:
+    return len(
+        tokenizer(
+            content,
+            add_special_tokens=False,
+            truncation=False,
+            verbose=False,
+        )["input_ids"]
+    )
+
+
+def collect_custom_chunk_token_counts(
+    payloads: list[dict[str, Any]],
+    embedding_config: OpenAICompatibleEmbeddingConfig,
+) -> list[dict[str, Any]]:
+    from lightrag.lightrag import _normalize_custom_chunk_entry
+
+    tokenizer = get_embedding_hf_tokenizer(embedding_config.model)
+    token_rows: list[dict[str, Any]] = []
+
+    for payload_index, payload in enumerate(payloads, start=1):
+        payload_doc_id = payload.get("doc_id", payload.get("full_doc_id"))
+        payload_file_path = payload.get(
+            "file_path", payload.get("filepath", "unknown_source")
+        )
+
+        for split_index, raw_chunk in enumerate(payload.get("splits", []), start=1):
+            normalized_chunk = _normalize_custom_chunk_entry(
+                raw_chunk=raw_chunk,
+                index=split_index - 1,
+                default_doc_id=payload_doc_id,
+                default_file_path=payload_file_path,
+            )
+            token_count = count_text_tokens(normalized_chunk["content"], tokenizer)
+            token_rows.append(
+                {
+                    "payload_index": payload_index,
+                    "split_index": split_index,
+                    "doc_id": normalized_chunk["doc_id"],
+                    "chunk_id": normalized_chunk["chunk_id"],
+                    "chunk_order_index": normalized_chunk["chunk_order_index"],
+                    "token_count": token_count,
+                    "over_limit": (
+                        embedding_config.max_token_size is not None
+                        and embedding_config.max_token_size > 0
+                        and token_count > embedding_config.max_token_size
+                    ),
+                }
+            )
+
+    return token_rows
+
+
+def truncate_text_by_tokenizer_limit(
+    content: str,
+    tokenizer: Any,
+    max_token_size: int | None,
+) -> str:
+    if max_token_size is None or max_token_size <= 0 or not content:
+        return content
+
+    encoded = tokenizer(
+        content,
+        add_special_tokens=False,
+        return_offsets_mapping=True,
+        truncation=False,
+        verbose=False,
+    )
+    offsets: list[tuple[int, int]] = list(encoded.get("offset_mapping", []))
+    if len(offsets) <= max_token_size:
+        return content
+
+    end_offset = offsets[max_token_size - 1][1]
+    while end_offset <= 0 and max_token_size < len(offsets):
+        max_token_size += 1
+        end_offset = offsets[max_token_size - 1][1]
+
+    if end_offset <= 0:
+        raise ValueError(
+            "Failed to derive a valid character boundary when truncating embedding text."
+        )
+
+    return content[:end_offset]
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    retry=retry_if_exception_type(
+        (RateLimitError, APIConnectionError, APITimeoutError)
+    ),
+)
+async def bge_openai_compatible_embed(
+    texts: list[str],
+    model: str,
+    base_url: str,
+    api_key: str,
+    embedding_dim: int | None = None,
+    max_token_size: int | None = None,
+    client_configs: dict[str, Any] | None = None,
+    token_tracker: Any | None = None,
+) -> np.ndarray:
+    from lightrag.llm.openai import create_openai_async_client
+    from lightrag.utils import logger
+
+    tokenizer = get_embedding_hf_tokenizer(model)
+    truncated_texts: list[str] = []
+    truncation_count = 0
+
+    for text in texts:
+        truncated_text = truncate_text_by_tokenizer_limit(
+            text,
+            tokenizer,
+            max_token_size,
+        )
+        if truncated_text != text:
+            truncation_count += 1
+        truncated_texts.append(truncated_text)
+
+    if truncation_count > 0 and max_token_size is not None and max_token_size > 0:
+        logger.info(
+            "Truncated %d/%d texts with %s tokenizer to fit token limit (%d)",
+            truncation_count,
+            len(texts),
+            model,
+            max_token_size,
+        )
+
+    openai_async_client = create_openai_async_client(
+        api_key=api_key,
+        base_url=base_url,
+        client_configs=client_configs,
+    )
+
+    try:
+        async with openai_async_client:
+            api_params = {
+                "model": model,
+                "input": truncated_texts,
+                "encoding_format": "base64",
+            }
+            if embedding_dim is not None:
+                api_params["dimensions"] = embedding_dim
+
+            response = await openai_async_client.embeddings.create(**api_params)
+
+            if token_tracker and hasattr(response, "usage"):
+                token_counts = {
+                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                    "total_tokens": getattr(response.usage, "total_tokens", 0),
+                }
+                token_tracker.add_usage(token_counts)
+
+            return np.array(
+                [
+                    np.array(dp.embedding, dtype=np.float32)
+                    if isinstance(dp.embedding, list)
+                    else np.frombuffer(
+                        base64.b64decode(dp.embedding), dtype=np.float32
+                    )
+                    for dp in response.data
+                ]
+            )
+    except APITimeoutError:
+        raise
+    except APIConnectionError:
+        raise
+    except RateLimitError:
+        raise
+
 async def local_llm_complete(
     prompt: str,
     system_prompt: str | None = None,
@@ -404,13 +594,12 @@ def build_rerank_model_func(config: RunConfig):
 
 async def run() -> None:
     from lightrag import LightRAG, QueryParam
-    from lightrag.llm.openai import openai_embed
     from lightrag.utils import EmbeddingFunc
 
     config = CONFIG
     embedding_config = config.embedding
     embedding_func_impl = partial(
-        openai_embed.func,
+        bge_openai_compatible_embed,
         model=embedding_config.model,
         base_url=embedding_config.base_url,
         api_key=embedding_config.api_key,
@@ -446,10 +635,18 @@ async def run() -> None:
             payload_count, doc_count, chunk_count = summarize_custom_chunk_payloads(
                 custom_chunk_payloads
             )
+            chunk_token_rows = collect_custom_chunk_token_counts(
+                custom_chunk_payloads,
+                embedding_config,
+            )
             print("\n=== Custom Chunk Import Preview ===")
             print(f"Input file: {config.chunk_input_path}")
             print(f"Payloads: {payload_count}  Documents: {doc_count}  "
                   f"Chunks: {chunk_count}  Skipped: {len(skipped_chunks)}")
+            print(
+                f"Embedding tokenizer: {embedding_config.model}  "
+                f"Limit: {embedding_config.max_token_size}"
+            )
 
             if skipped_chunks:
                 for skipped in skipped_chunks[:5]:
@@ -459,6 +656,19 @@ async def run() -> None:
                     )
                 if len(skipped_chunks) > 5:
                     print(f"  ... and {len(skipped_chunks) - 5} more")
+
+            print("\n=== Chunk Token Counts ===")
+            for row in chunk_token_rows:
+                status = "OVER_LIMIT" if row["over_limit"] else "OK"
+                print(
+                    f"payload={row['payload_index']} "
+                    f"split={row['split_index']} "
+                    f"order={row['chunk_order_index']} "
+                    f"doc_id={row['doc_id']} "
+                    f"chunk_id={row['chunk_id']} "
+                    f"tokens={row['token_count']} "
+                    f"status={status}"
+                )
 
             for payload in custom_chunk_payloads:
                 await rag.ainsert_custom_chunks(payload)
