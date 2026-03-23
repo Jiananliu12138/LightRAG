@@ -1584,6 +1584,7 @@ class LightRAG:
         custom_chunk_metadata: dict[str, Any] = {}
         current_time = datetime.now(timezone.utc).isoformat()
         processing_start_time = int(time.time())
+        created_at = current_time
         pipeline_status = {
             "latest_message": "",
             "history_messages": [],
@@ -1797,7 +1798,7 @@ class LightRAG:
                         "content_length": len(normalized_full_text),
                         "chunks_count": len(inserting_chunks),
                         "chunks_list": current_chunks_list,
-                        "created_at": current_time,
+                        "created_at": created_at,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                         "file_path": normalized_file_path,
                         "track_id": track_id,
@@ -1821,7 +1822,7 @@ class LightRAG:
                             "content_length": len(normalized_full_text),
                             "chunks_count": len(inserting_chunks),
                             "chunks_list": list(inserting_chunks.keys()),
-                            "created_at": current_time,
+                            "created_at": created_at,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                             "file_path": normalized_file_path,
                             "track_id": track_id or "",
@@ -1926,20 +1927,20 @@ class LightRAG:
             }
 
         # 2. Generate document initial status (without content)
-        new_docs: dict[str, Any] = {
-            id_: {
+        new_docs: dict[str, Any] = {}
+        for id_, content_data in contents.items():
+            current_time = datetime.now(timezone.utc).isoformat()
+            new_docs[id_] = {
                 "status": DocStatus.PENDING,
                 "content_summary": get_content_summary(content_data["content"]),
                 "content_length": len(content_data["content"]),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": current_time,
+                "updated_at": current_time,
                 "file_path": content_data[
                     "file_path"
                 ],  # Store file path in document status
                 "track_id": track_id,  # Store track_id in document status
             }
-            for id_, content_data in contents.items()
-        }
 
         # 3. Filter out already processed documents
         # Get docs ids
@@ -2488,14 +2489,14 @@ class LightRAG:
                                         doc_id: {
                                             "status": DocStatus.PROCESSING,
                                             "chunks_count": len(chunks),
-                                            "chunks_list": list(
-                                                chunks.keys()
-                                            ),  # Save chunks list
-                                            "content_summary": status_doc.content_summary,
-                                            "content_length": status_doc.content_length,
-                                            "created_at": status_doc.created_at,
-                                            "updated_at": datetime.now(
-                                                timezone.utc
+                                        "chunks_list": list(
+                                            chunks.keys()
+                                        ),  # Save chunks list
+                                        "content_summary": status_doc.content_summary,
+                                        "content_length": status_doc.content_length,
+                                        "created_at": status_doc.created_at,
+                                        "updated_at": datetime.now(
+                                            timezone.utc
                                             ).isoformat(),
                                             "file_path": file_path,
                                             "track_id": status_doc.track_id,  # Preserve existing track_id

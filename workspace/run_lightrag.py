@@ -68,7 +68,7 @@ class SkippedChunkInfo:
 
 @dataclass(frozen=True)
 class RunConfig:
-    chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/test_database/3.9/2wikimqa_lumber_chunk_Qwen2.5-7B-Instruct.jsonl"
+    chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/test_database/3.9/2wikimqa_lumber_chunk_Qwen2.5-7B-Instruct.json"
     query_input_path: str | None = None
     question: str = "Who is George V?"
     mode: str = "hybrid"
@@ -80,7 +80,7 @@ class RunConfig:
             base_url="http://127.0.0.1:8005/v1",
             api_key="EMPTY",
             temperature=0.2,
-            max_tokens=4096,
+            max_tokens=14096,
             extra_body={},
         )
     )
@@ -398,6 +398,50 @@ def collect_custom_chunk_token_counts(
     return token_rows
 
 
+async def split_existing_custom_chunk_payloads(
+    rag: Any,
+    payloads: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    from lightrag.base import DocStatus
+    from lightrag.lightrag import _normalize_custom_chunks_payload
+
+    pending_payloads: list[dict[str, Any]] = []
+    existing_payloads: list[dict[str, Any]] = []
+
+    for payload_index, payload in enumerate(payloads, start=1):
+        _, doc_key, normalized_file_path, _ = _normalize_custom_chunks_payload(
+            full_text=payload,
+            text_chunks=None,
+            doc_id=None,
+            file_path=None,
+        )
+        existing_doc_status = await rag.doc_status.get_by_id(doc_key)
+        existing_status = existing_doc_status.get("status") if existing_doc_status else None
+
+        if existing_status in (DocStatus.PROCESSING.value, DocStatus.FAILED.value):
+            pending_payloads.append(payload)
+            continue
+
+        existing_full_doc = await rag.full_docs.get_by_id(doc_key)
+        if existing_doc_status or existing_full_doc:
+            existing_payloads.append(
+                {
+                    "payload_index": payload_index,
+                    "doc_id": doc_key,
+                    "file_path": normalized_file_path,
+                    "status": existing_status or "stored",
+                    "track_id": existing_doc_status.get("track_id", "")
+                    if existing_doc_status
+                    else "",
+                }
+            )
+            continue
+
+        pending_payloads.append(payload)
+
+    return pending_payloads, existing_payloads
+
+
 def truncate_text_by_tokenizer_limit(
     content: str,
     tokenizer: Any,
@@ -657,8 +701,18 @@ async def run() -> None:
                 if len(skipped_chunks) > 5:
                     print(f"  ... and {len(skipped_chunks) - 5} more")
 
+            token_average = (
+                sum(row["token_count"] for row in chunk_token_rows) / len(chunk_token_rows)
+                if chunk_token_rows
+                else 0.0
+            )
+            over_limit_count = sum(1 for row in chunk_token_rows if row["over_limit"])
             print("\n=== Chunk Token Counts ===")
-            for row in chunk_token_rows:
+            print(
+                f"Average tokens: {token_average:.2f}  "
+                f"Over limit: {over_limit_count}/{len(chunk_token_rows)}"
+            )
+            for row in chunk_token_rows[:10]:
                 status = "OVER_LIMIT" if row["over_limit"] else "OK"
                 print(
                     f"payload={row['payload_index']} "
@@ -669,6 +723,26 @@ async def run() -> None:
                     f"tokens={row['token_count']} "
                     f"status={status}"
                 )
+            if len(chunk_token_rows) > 10:
+                print(f"  ... and {len(chunk_token_rows) - 10} more")
+
+            custom_chunk_payloads, existing_payloads = await split_existing_custom_chunk_payloads(
+                rag,
+                custom_chunk_payloads,
+            )
+            if existing_payloads:
+                print("\n=== Already Embedded Documents ===")
+                print(f"Count: {len(existing_payloads)}")
+                for row in existing_payloads[:10]:
+                    print(
+                        f"payload={row['payload_index']} "
+                        f"doc_id={row['doc_id']} "
+                        f"file_path={row['file_path']} "
+                        f"status={row['status']} "
+                        f"track_id={row['track_id']}"
+                    )
+                if len(existing_payloads) > 10:
+                    print(f"  ... and {len(existing_payloads) - 10} more")
 
             for payload in custom_chunk_payloads:
                 await rag.ainsert_custom_chunks(payload)
