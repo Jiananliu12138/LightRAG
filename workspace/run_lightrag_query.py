@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +58,7 @@ class RunConfig:
     query_input_path: str | None = None
     question: str = "Who is George V?"
     mode: str = "hybrid"
+    max_parallel_queries: int = 10
     working_dir: str = str(WORKING_DIR)
     output_path: str = str(OUTPUT_PATH)
     llm: OpenAICompatibleLLMConfig = field(
@@ -72,11 +73,11 @@ class RunConfig:
     )
     embedding: OpenAICompatibleEmbeddingConfig = field(
         default_factory=lambda: OpenAICompatibleEmbeddingConfig(
-            model="BAAI/bge-large-en-v1.5",
+            model="BAAI/bge-m3",
             base_url="http://127.0.0.1:8003/v1",
             api_key="EMPTY",
             embedding_dim=1024,
-            max_token_size=480,
+            max_token_size=8192,
         )
     )
     rerank: RerankConfig = field(default_factory=RerankConfig)
@@ -197,6 +198,45 @@ def build_output_record(
     }
 
 
+async def run_query_records(
+    rag: Any,
+    query_records: list[dict[str, Any]],
+    config: RunConfig,
+    query_param_factory: Callable[[], Any],
+) -> list[dict[str, Any]]:
+    total = len(query_records)
+    max_parallel_queries = max(1, config.max_parallel_queries)
+    semaphore = asyncio.Semaphore(max_parallel_queries)
+    progress_lock = asyncio.Lock()
+    completed = 0
+
+    async def run_single_query(
+        index: int,
+        query_record: dict[str, Any],
+    ) -> dict[str, Any]:
+        nonlocal completed
+
+        async with semaphore:
+            print(f"Running query {index}/{total}")
+            result = await rag.aquery_llm(
+                query_record["user_input"],
+                param=query_param_factory(),
+            )
+            output_record = build_output_record(query_record, result)
+
+        async with progress_lock:
+            completed += 1
+            print(f"Completed query {index}/{total} ({completed}/{total})")
+
+        return output_record
+
+    tasks = [
+        asyncio.create_task(run_single_query(index, query_record))
+        for index, query_record in enumerate(query_records, start=1)
+    ]
+    return await asyncio.gather(*tasks)
+
+
 async def local_llm_complete(
     prompt: str,
     system_prompt: str | None = None,
@@ -311,11 +351,12 @@ async def run() -> None:
     await rag.initialize_storages()
     try:
         query_records = load_query_records(config)
-        results: list[dict[str, Any]] = []
+        max_parallel_queries = max(1, config.max_parallel_queries)
 
         print("\n=== Query Execution Preview ===")
         print(f"Query count: {len(query_records)}")
         print(f"Mode: {config.mode}")
+        print(f"Max parallel queries: {max_parallel_queries}")
         print(f"Working dir: {config.working_dir}")
         if config.query_input_path:
             print(
@@ -325,16 +366,15 @@ async def run() -> None:
         else:
             print("Question source: question")
 
-        for index, query_record in enumerate(query_records, start=1):
-            print(f"Running query {index}/{len(query_records)}")
-            result = await rag.aquery_llm(
-                query_record["user_input"],
-                param=QueryParam(
-                    mode=config.mode,
-                    enable_rerank=config.rerank.enabled,
-                ),
-            )
-            results.append(build_output_record(query_record, result))
+        results = await run_query_records(
+            rag=rag,
+            query_records=query_records,
+            config=config,
+            query_param_factory=lambda: QueryParam(
+                mode=config.mode,
+                enable_rerank=config.rerank.enabled,
+            ),
+        )
 
         output_path = Path(config.output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
