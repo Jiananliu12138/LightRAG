@@ -256,6 +256,39 @@ async def run_query_records(
     return await asyncio.gather(*tasks)
 
 
+_tokenizer = None
+
+
+def _get_tokenizer():
+    global _tokenizer
+    if _tokenizer is None:
+        from transformers import AutoTokenizer
+
+        _tokenizer = AutoTokenizer.from_pretrained(
+            "/data/h50056789/Rag_Chunking/model/Qwen/Qwen2.5-7B-Instruct",
+            trust_remote_code=True,
+        )
+    return _tokenizer
+
+
+def _count_prompt_tokens(
+    prompt: str,
+    system_prompt: str | None,
+    history_messages: list[dict[str, Any]] | None,
+) -> int:
+    tokenizer = _get_tokenizer()
+    messages: list[dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    for msg in history_messages or []:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            messages.append({"role": msg.get("role", "user"), "content": content})
+    messages.append({"role": "user", "content": prompt})
+    token_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+    return len(token_ids)
+
+
 async def local_llm_complete(
     prompt: str,
     system_prompt: str | None = None,
@@ -263,6 +296,9 @@ async def local_llm_complete(
     **kwargs: Any,
 ) -> str:
     from lightrag.llm.openai import openai_complete_if_cache
+
+    token_count = _count_prompt_tokens(prompt, system_prompt, history_messages)
+    print(f"[LLM] Input tokens: {token_count}")
 
     llm_config = CONFIG.llm
     request_kwargs: dict[str, Any] = {}
