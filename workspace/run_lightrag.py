@@ -111,7 +111,7 @@ def load_json_items(input_path: Path) -> list[Any]:
     if suffix == ".jsonl":
         text = input_path.read_text(encoding="utf-8")
         items: list[Any] = []
-        decoder = json.JSONDecoder()
+        decoder = json.JSONDecoder(strict=False)
         position = 0
         text_length = len(text)
 
@@ -138,7 +138,7 @@ def load_json_items(input_path: Path) -> list[Any]:
         return items
 
     if suffix == ".json":
-        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        payload = json.loads(input_path.read_text(encoding="utf-8"), strict=False)
         if isinstance(payload, list):
             return payload
         if isinstance(payload, dict):
