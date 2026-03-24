@@ -92,13 +92,32 @@ def load_json_items(input_path: Path) -> list[Any]:
 
     suffix = input_path.suffix.lower()
     if suffix == ".jsonl":
+        text = input_path.read_text(encoding="utf-8")
         items: list[Any] = []
-        with input_path.open("r", encoding="utf-8") as file:
-            for raw_line in file:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                items.append(json.loads(line))
+        decoder = json.JSONDecoder()
+        position = 0
+        text_length = len(text)
+
+        while position < text_length:
+            while position < text_length and text[position].isspace():
+                position += 1
+            if position >= text_length:
+                break
+
+            try:
+                item, next_position = decoder.raw_decode(text, position)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "Failed to parse JSONL input. This loader supports either "
+                    "standard one-JSON-object-per-line JSONL or multiple JSON "
+                    "objects separated by whitespace. If text fields contain "
+                    "literal newlines, they must be escaped as \\n inside JSON "
+                    "strings, or the file should be converted to a regular .json file."
+                ) from exc
+
+            items.append(item)
+            position = next_position
+
         return items
 
     if suffix == ".json":

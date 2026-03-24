@@ -108,19 +108,48 @@ def load_json_items(input_path: Path) -> list[Any]:
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     suffix = input_path.suffix.lower()
-    if suffix != ".json":
+    if suffix == ".jsonl":
+        text = input_path.read_text(encoding="utf-8")
+        items: list[Any] = []
+        decoder = json.JSONDecoder()
+        position = 0
+        text_length = len(text)
+
+        while position < text_length:
+            while position < text_length and text[position].isspace():
+                position += 1
+            if position >= text_length:
+                break
+
+            try:
+                item, next_position = decoder.raw_decode(text, position)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "Failed to parse JSONL input. This loader supports either "
+                    "standard one-JSON-object-per-line JSONL or multiple JSON "
+                    "objects separated by whitespace. If text fields contain "
+                    "literal newlines, they must be escaped as \\n inside JSON "
+                    "strings, or the file should be converted to a regular .json file."
+                ) from exc
+
+            items.append(item)
+            position = next_position
+
+        return items
+
+    if suffix == ".json":
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            return [payload]
+
         raise ValueError(
-            f"Unsupported input file type: {input_path.suffix}. Only .json is supported."
+            "Input JSON must contain either a payload object or a top-level array of payload objects"
         )
 
-    payload = json.loads(input_path.read_text(encoding="utf-8"))
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        return [payload]
-
     raise ValueError(
-        "Input JSON must contain either a payload object or a top-level array of payload objects"
+        f"Unsupported input file type: {input_path.suffix}. Only .json and .jsonl are supported."
     )
 
 
