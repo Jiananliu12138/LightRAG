@@ -275,8 +275,18 @@ def _count_prompt_tokens(
     prompt: str,
     system_prompt: str | None,
     history_messages: list[dict[str, Any]] | None,
-) -> int:
+) -> dict[str, int]:
     tokenizer = _get_tokenizer()
+    parts: dict[str, int] = {}
+    if system_prompt:
+        parts["system_prompt"] = len(tokenizer.encode(system_prompt))
+    for i, msg in enumerate(history_messages or []):
+        content = msg.get("content", "")
+        if isinstance(content, str) and content:
+            role = msg.get("role", "user")
+            parts[f"history[{i}]({role})"] = len(tokenizer.encode(content))
+    parts["query"] = len(tokenizer.encode(prompt))
+
     messages: list[dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -285,8 +295,8 @@ def _count_prompt_tokens(
         if isinstance(content, str):
             messages.append({"role": msg.get("role", "user"), "content": content})
     messages.append({"role": "user", "content": prompt})
-    token_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-    return len(token_ids)
+    parts["total"] = len(tokenizer.apply_chat_template(messages, add_generation_prompt=True))
+    return parts
 
 
 async def local_llm_complete(
@@ -297,8 +307,15 @@ async def local_llm_complete(
 ) -> str:
     from lightrag.llm.openai import openai_complete_if_cache
 
-    token_count = _count_prompt_tokens(prompt, system_prompt, history_messages)
-    print(f"[LLM] Input tokens: {token_count}")
+    if kwargs.get("keyword_extraction"):
+        stage = "Keyword Extraction"
+    elif kwargs.get("enable_cot"):
+        stage = "Answer Generation"
+    else:
+        stage = "LLM Call"
+    token_parts = _count_prompt_tokens(prompt, system_prompt, history_messages)
+    detail = "  ".join(f"{k}={v}" for k, v in token_parts.items())
+    print(f"[{stage}] {detail}")
 
     llm_config = CONFIG.llm
     request_kwargs: dict[str, Any] = {}
