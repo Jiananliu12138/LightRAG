@@ -480,6 +480,17 @@ class MilvusHybridSearchConfig:
 @final
 @dataclass
 class MilvusVectorDBStorage(BaseVectorStorage):
+    def _is_milvus_lite_connection(self) -> bool:
+        """Return True when the current storage targets a local Milvus Lite file."""
+        uri = self._get_milvus_connection_kwargs(include_db_name=False).get("uri")
+        return _is_local_milvus_uri(uri)
+
+    def _build_field_schema(self, **kwargs: Any) -> FieldSchema:
+        """Build a field schema compatible with both Milvus server and Milvus Lite."""
+        if self._is_milvus_lite_connection():
+            kwargs.pop("nullable", None)
+        return FieldSchema(**kwargs)
+
     def _get_milvus_connection_kwargs(self, include_db_name: bool = True) -> dict:
         """Build Milvus connection kwargs from env/config."""
         default_lite_uri = os.path.join(
@@ -598,13 +609,13 @@ class MilvusVectorDBStorage(BaseVectorStorage):
         # Determine specific fields based on namespace
         if self.namespace.endswith("entities"):
             specific_fields = [
-                FieldSchema(
+                self._build_field_schema(
                     name="entity_name",
                     dtype=DataType.VARCHAR,
                     max_length=512,
                     nullable=True,
                 ),
-                FieldSchema(
+                self._build_field_schema(
                     name="file_path",
                     dtype=DataType.VARCHAR,
                     max_length=DEFAULT_MAX_FILE_PATH_LENGTH,
@@ -615,13 +626,13 @@ class MilvusVectorDBStorage(BaseVectorStorage):
 
         elif self.namespace.endswith("relationships"):
             specific_fields = [
-                FieldSchema(
+                self._build_field_schema(
                     name="src_id", dtype=DataType.VARCHAR, max_length=512, nullable=True
                 ),
-                FieldSchema(
+                self._build_field_schema(
                     name="tgt_id", dtype=DataType.VARCHAR, max_length=512, nullable=True
                 ),
-                FieldSchema(
+                self._build_field_schema(
                     name="file_path",
                     dtype=DataType.VARCHAR,
                     max_length=DEFAULT_MAX_FILE_PATH_LENGTH,
@@ -632,13 +643,13 @@ class MilvusVectorDBStorage(BaseVectorStorage):
 
         elif self.namespace.endswith("chunks"):
             specific_fields = [
-                FieldSchema(
+                self._build_field_schema(
                     name="full_doc_id",
                     dtype=DataType.VARCHAR,
                     max_length=64,
                     nullable=True,
                 ),
-                FieldSchema(
+                self._build_field_schema(
                     name="file_path",
                     dtype=DataType.VARCHAR,
                     max_length=DEFAULT_MAX_FILE_PATH_LENGTH,
@@ -650,7 +661,7 @@ class MilvusVectorDBStorage(BaseVectorStorage):
         else:
             # Default generic schema (backward compatibility)
             specific_fields = [
-                FieldSchema(
+                self._build_field_schema(
                     name="file_path",
                     dtype=DataType.VARCHAR,
                     max_length=DEFAULT_MAX_FILE_PATH_LENGTH,
