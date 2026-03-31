@@ -82,3 +82,4 @@ memory-bank
 # Claude Code
 CLAUDE.md
 workspace/rag_storage/
+workspace/rag_storage_milvus/

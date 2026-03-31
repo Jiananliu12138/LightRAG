@@ -6,11 +6,16 @@ from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable
+from milvus_lite_config import (
+    MilvusLiteConfig,
+    build_milvus_vector_storage_kwargs,
+    configure_local_milvus_lite,
+)
 
 os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-WORKING_DIR = Path(__file__).resolve().parent / "rag_storage" / "2wikimqa"
-OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "query_result_query_only.json"
+WORKING_DIR = Path(__file__).resolve().parent / "rag_storage_milvus" / "LightRAG"
+OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "test.json"
 
 WORKING_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +64,7 @@ class RunConfig:
     question: str = "Who is George V?"
     mode: str = "hybrid"
     max_parallel_queries: int = 10
+    vector_storage: str = "MilvusVectorDBStorage"
     working_dir: str = str(WORKING_DIR)
     output_path: str = str(OUTPUT_PATH)
     llm: OpenAICompatibleLLMConfig = field(
@@ -81,6 +87,7 @@ class RunConfig:
         )
     )
     rerank: RerankConfig = field(default_factory=RerankConfig)
+    milvus: MilvusLiteConfig = field(default_factory=MilvusLiteConfig)
 
 
 CONFIG = RunConfig()
@@ -392,6 +399,7 @@ async def run() -> None:
     from lightrag.utils import EmbeddingFunc
 
     config = CONFIG
+    milvus_db_path = configure_local_milvus_lite(config.working_dir, config.milvus)
     embedding_config = config.embedding
     embedding_func_impl = partial(
         openai_embed.func,
@@ -418,6 +426,10 @@ async def run() -> None:
         min_rerank_score=config.rerank.min_score,
         max_parallel_insert=10,
         default_llm_timeout=config.llm.timeout,
+        vector_storage=config.vector_storage,
+        vector_db_storage_cls_kwargs=build_milvus_vector_storage_kwargs(
+            config.milvus
+        ),
     )
 
     await rag.initialize_storages()
@@ -430,6 +442,7 @@ async def run() -> None:
         print(f"Mode: {config.mode}")
         print(f"Max parallel queries: {max_parallel_queries}")
         print(f"Working dir: {config.working_dir}")
+        print(f"Milvus Lite DB: {milvus_db_path}")
         if config.query_input_path:
             print(
                 "Question source: query_input_path "

@@ -48,8 +48,8 @@ DEFAULT_TOP_K = 40
 DEFAULT_CHUNK_TOP_K = 20 #最后输入prompt的chunk数量
 DEFAULT_MAX_ENTITY_TOKENS = 6000
 DEFAULT_MAX_RELATION_TOKENS = 8000
-DEFAULT_MAX_TOTAL_TOKENS = 30000
-DEFAULT_COSINE_THRESHOLD = 0.2
+DEFAULT_MAX_TOTAL_TOKENS = 50000
+DEFAULT_COSINE_THRESHOLD = 0.1
 DEFAULT_RELATED_CHUNK_NUMBER = 5
 DEFAULT_KG_CHUNK_PICK_METHOD = "VECTOR"
 
@@ -61,8 +61,8 @@ DEFAULT_MIN_RERANK_SCORE = 0.0
 DEFAULT_RERANK_BINDING = "null"
 
 # Default source ids limit in meta data for entity and relation
-DEFAULT_MAX_SOURCE_IDS_PER_ENTITY = 300
-DEFAULT_MAX_SOURCE_IDS_PER_RELATION = 300
+DEFAULT_MAX_SOURCE_IDS_PER_ENTITY = 500
+DEFAULT_MAX_SOURCE_IDS_PER_RELATION = 500
 ### control chunk_ids limitation method: FIFO, FIFO
 ###    FIFO: First in first out
 ###    KEEP: Keep oldest (less merge action and faster)
@@ -90,7 +90,7 @@ DEFAULT_MAX_ASYNC = 10  # Default maximum async operations
 DEFAULT_MAX_PARALLEL_INSERT = 10  # Default maximum parallel insert operations
 
 # Embedding configuration defaults
-DEFAULT_EMBEDDING_FUNC_MAX_ASYNC = 8  # Default max async for embedding functions
+DEFAULT_EMBEDDING_FUNC_MAX_ASYNC = 10  # Default max async for embedding functions
 DEFAULT_EMBEDDING_BATCH_NUM = 10  # Default batch size for embedding computations
 
 # Gunicorn worker timeout

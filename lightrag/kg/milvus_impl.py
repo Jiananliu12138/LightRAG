@@ -1,5 +1,9 @@
 import asyncio
+from collections import Counter
+import hashlib
+import math
 import os
+import re
 from typing import Any, final, Optional, Dict
 from dataclasses import dataclass, fields
 import numpy as np
@@ -13,7 +17,15 @@ if not pm.is_installed("pymilvus"):
     pm.install("pymilvus>=2.6.2")
 
 import configparser
-from pymilvus import MilvusClient, DataType, CollectionSchema, FieldSchema  # type: ignore
+from pymilvus import (  # type: ignore
+    AnnSearchRequest,
+    CollectionSchema,
+    DataType,
+    FieldSchema,
+    MilvusClient,
+    RRFRanker,
+    WeightedRanker,
+)
 from packaging import version
 
 config = configparser.ConfigParser()
@@ -47,6 +59,10 @@ INDEX_VERSION_REQUIREMENTS = {
     "HNSW_SQ": "2.6.8",  # HNSW_SQ requires Milvus 2.6.8+ (supports sq_types such as SQ4U, SQ6, SQ8, BF16, FP16)
 }
 
+SPARSE_VECTOR_FIELD_NAME = "sparse_vector"
+SPARSE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+")
+SPARSE_HASH_SPACE = (1 << 31) - 1
+
 
 def _get_env_bool(key: str, default: bool = False) -> bool:
     """Parse environment variable as boolean"""
@@ -69,6 +85,32 @@ def _get_env_int(key: str, default: int) -> int:
                 f"Invalid integer value for {key}: {val}, using default {default}"
             )
     return default
+
+
+def _get_env_float(key: str, default: float) -> float:
+    """Parse environment variable as float"""
+    val = os.environ.get(key, "")
+    if val:
+        try:
+            return float(val)
+        except ValueError:
+            logger.warning(
+                f"Invalid float value for {key}: {val}, using default {default}"
+            )
+    return default
+
+
+def _is_local_milvus_uri(uri: Optional[str]) -> bool:
+    """Return True when the Milvus URI points to a local Milvus Lite file."""
+    if uri is None:
+        return False
+
+    normalized = str(uri).strip().lower()
+    if not normalized:
+        return False
+
+    remote_prefixes = ("http://", "https://", "tcp://", "grpc://", "unix://")
+    return not normalized.startswith(remote_prefixes)
 
 
 @dataclass
@@ -327,22 +369,135 @@ class MilvusIndexConfig:
         }
 
 
+@dataclass
+class MilvusHybridSearchConfig:
+    """
+    Lightweight dense+sparse hybrid search configuration for Milvus.
+
+    Sparse vectors are generated locally from lexical terms so the same Milvus
+    collection can benefit from `hybrid_search()` even when Milvus Lite cannot
+    provide BM25 full-text search.
+    """
+
+    enable_sparse: Optional[bool] = None
+    enable_hybrid_search: Optional[bool] = None
+    enabled: Optional[bool] = None
+    hybrid_ranker: Optional[str] = None
+    hybrid_ranker_k: Optional[int] = None
+    dense_weight: Optional[float] = None
+    sparse_weight: Optional[float] = None
+    sparse_max_features: Optional[int] = None
+    sparse_min_token_length: Optional[int] = None
+    candidate_limit_multiplier: Optional[int] = None
+
+    def __post_init__(self):
+        if self.enable_hybrid_search is None:
+            if self.enabled is not None:
+                self.enable_hybrid_search = self.enabled
+            else:
+                self.enable_hybrid_search = _get_env_bool(
+                    "MILVUS_ENABLE_HYBRID_SEARCH", False
+                )
+        if self.enable_sparse is None:
+            self.enable_sparse = _get_env_bool(
+                "MILVUS_ENABLE_SPARSE", self.enable_hybrid_search
+            )
+        if self.hybrid_ranker is None:
+            self.hybrid_ranker = os.environ.get(
+                "MILVUS_HYBRID_RANKER", "WeightedRanker"
+            )
+        self.hybrid_ranker = str(self.hybrid_ranker).strip() or "WeightedRanker"
+        if self.hybrid_ranker_k is None:
+            self.hybrid_ranker_k = _get_env_int("MILVUS_HYBRID_RANKER_K", 60)
+        if self.dense_weight is None:
+            self.dense_weight = _get_env_float("MILVUS_HYBRID_DENSE_WEIGHT", 1.0)
+        if self.sparse_weight is None:
+            self.sparse_weight = _get_env_float("MILVUS_HYBRID_SPARSE_WEIGHT", 0.35)
+        if self.sparse_max_features is None:
+            self.sparse_max_features = _get_env_int(
+                "MILVUS_HYBRID_SPARSE_MAX_FEATURES", 256
+            )
+        if self.sparse_min_token_length is None:
+            self.sparse_min_token_length = _get_env_int(
+                "MILVUS_HYBRID_SPARSE_MIN_TOKEN_LENGTH", 2
+            )
+        if self.candidate_limit_multiplier is None:
+            self.candidate_limit_multiplier = _get_env_int(
+                "MILVUS_HYBRID_CANDIDATE_LIMIT_MULTIPLIER", 4
+            )
+
+        self._validate()
+
+    def _validate(self) -> None:
+        supported_rankers = {"WeightedRanker", "RRFRanker"}
+        if self.hybrid_ranker not in supported_rankers:
+            raise ValueError(
+                f"Unsupported hybrid ranker: {self.hybrid_ranker}. "
+                f"Supported: {supported_rankers}"
+            )
+        if self.hybrid_ranker_k < 1:
+            raise ValueError("hybrid_ranker_k must be >= 1")
+        if self.dense_weight < 0:
+            raise ValueError("dense_weight must be >= 0")
+        if self.sparse_weight < 0:
+            raise ValueError("sparse_weight must be >= 0")
+        if (
+            self.hybrid_ranker == "WeightedRanker"
+            and self.dense_weight == 0
+            and self.sparse_weight == 0
+        ):
+            raise ValueError("At least one hybrid search weight must be > 0")
+        if self.enable_hybrid_search and not self.enable_sparse:
+            raise ValueError("Hybrid search requires sparse vectors to be enabled")
+        if self.sparse_max_features < 1:
+            raise ValueError("sparse_max_features must be >= 1")
+        if self.sparse_min_token_length < 1:
+            raise ValueError("sparse_min_token_length must be >= 1")
+        if self.candidate_limit_multiplier < 1:
+            raise ValueError("candidate_limit_multiplier must be >= 1")
+
+    def build_request_limit(self, top_k: int) -> int:
+        return max(top_k, top_k * self.candidate_limit_multiplier)
+
+    @classmethod
+    def get_config_field_names(cls) -> set:
+        return {f.name for f in fields(cls)}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enable_sparse": self.enable_sparse,
+            "enable_hybrid_search": self.enable_hybrid_search,
+            "hybrid_ranker": self.hybrid_ranker,
+            "hybrid_ranker_k": self.hybrid_ranker_k,
+            "dense_weight": self.dense_weight,
+            "sparse_weight": self.sparse_weight,
+            "sparse_max_features": self.sparse_max_features,
+            "sparse_min_token_length": self.sparse_min_token_length,
+            "candidate_limit_multiplier": self.candidate_limit_multiplier,
+        }
+
+
 @final
 @dataclass
 class MilvusVectorDBStorage(BaseVectorStorage):
     def _get_milvus_connection_kwargs(self, include_db_name: bool = True) -> dict:
         """Build Milvus connection kwargs from env/config."""
-        connection_kwargs = {
-            "uri": os.environ.get(
+        default_lite_uri = os.path.join(
+            self.global_config["working_dir"], "milvus_lite.db"
+        )
+        lite_uri = os.environ.get(
+            "MILVUS_LITE_URI",
+            config.get("milvus", "lite_uri", fallback=None),
+        )
+        resolved_uri = (
+            lite_uri
+            or os.environ.get(
                 "MILVUS_URI",
-                config.get(
-                    "milvus",
-                    "uri",
-                    fallback=os.path.join(
-                        self.global_config["working_dir"], "milvus_lite.db"
-                    ),
-                ),
-            ),
+                config.get("milvus", "uri", fallback=default_lite_uri),
+            )
+        )
+        connection_kwargs = {
+            "uri": resolved_uri,
             "user": os.environ.get(
                 "MILVUS_USER", config.get("milvus", "user", fallback=None)
             ),
@@ -366,6 +521,10 @@ class MilvusVectorDBStorage(BaseVectorStorage):
 
     def _get_milvus_db_name(self) -> Optional[str]:
         """Return the configured Milvus database name, if any."""
+        uri = self._get_milvus_connection_kwargs(include_db_name=False).get("uri")
+        if _is_local_milvus_uri(uri):
+            return None
+
         db_name = self._get_milvus_connection_kwargs(include_db_name=True).get(
             "db_name"
         )
@@ -377,9 +536,22 @@ class MilvusVectorDBStorage(BaseVectorStorage):
 
     def _create_milvus_client(self) -> MilvusClient:
         """Create a Milvus client and ensure the configured database exists."""
-        client = MilvusClient(
-            **self._get_milvus_connection_kwargs(include_db_name=False)
-        )
+        connection_kwargs = self._get_milvus_connection_kwargs(include_db_name=False)
+        uri = connection_kwargs.get("uri")
+
+        try:
+            client = MilvusClient(**connection_kwargs)
+        except Exception as e:
+            error_message = str(e).lower()
+            if _is_local_milvus_uri(uri) and "milvus-lite is required" in error_message:
+                raise RuntimeError(
+                    "Local Milvus Lite connections require the `milvus-lite` runtime. "
+                    "Official Milvus Lite currently supports Ubuntu/macOS; on Windows, "
+                    "please use WSL2, a Linux/macOS environment, or switch MILVUS_URI to "
+                    "a standalone Milvus server."
+                ) from e
+            raise
+
         db_name = self._get_milvus_db_name()
 
         if not db_name:
@@ -418,6 +590,10 @@ class MilvusVectorDBStorage(BaseVectorStorage):
             FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=dimension),
             FieldSchema(name="created_at", dtype=DataType.INT64),
         ]
+        if self.hybrid_search_config.enable_sparse:
+            base_fields.append(
+                FieldSchema(name=SPARSE_VECTOR_FIELD_NAME, dtype=DataType.SPARSE_FLOAT_VECTOR)
+            )
 
         # Determine specific fields based on namespace
         if self.namespace.endswith("entities"):
@@ -580,6 +756,34 @@ class MilvusVectorDBStorage(BaseVectorStorage):
             f"[{self.workspace}] Created vector index with config: {self.index_config.to_dict()}"
         )
 
+        if self.hybrid_search_config.enable_sparse:
+            hybrid_index_params = self._get_index_params()
+            if hybrid_index_params is not None:
+                hybrid_index_params.add_index(
+                    field_name=SPARSE_VECTOR_FIELD_NAME,
+                    index_type="SPARSE_INVERTED_INDEX",
+                    metric_type="IP",
+                    params={},
+                )
+                self._client.create_index(
+                    collection_name=self.final_namespace,
+                    index_params=hybrid_index_params,
+                )
+            else:
+                self._client.create_index(
+                    collection_name=self.final_namespace,
+                    field_name=SPARSE_VECTOR_FIELD_NAME,
+                    index_params={
+                        "index_type": "SPARSE_INVERTED_INDEX",
+                        "metric_type": "IP",
+                        "params": {},
+                    },
+                )
+
+            logger.debug(
+                f"[{self.workspace}] Created sparse vector index for hybrid search"
+            )
+
         # Create scalar indexes based on namespace
         # Wrap scalar index creation in try-except to allow graceful degradation
         try:
@@ -688,6 +892,8 @@ class MilvusVectorDBStorage(BaseVectorStorage):
             "vector": {"type": "FloatVector"},
             "created_at": {"type": "Int64"},
         }
+        if self.hybrid_search_config.enable_sparse:
+            base_fields[SPARSE_VECTOR_FIELD_NAME] = {"type": "SparseFloatVector"}
 
         # Add specific fields based on namespace
         if self.namespace.endswith("entities"):
@@ -735,6 +941,7 @@ class MilvusVectorDBStorage(BaseVectorStorage):
             type_mapping = {
                 21: "VarChar",
                 101: "FloatVector",
+                104: "SparseFloatVector",
                 5: "Int64",
                 9: "Double",
             }
@@ -749,6 +956,7 @@ class MilvusVectorDBStorage(BaseVectorStorage):
             "VARCHAR": "VarChar",
             "String": "VarChar",
             "FLOAT_VECTOR": "FloatVector",
+            "SPARSE_FLOAT_VECTOR": "SparseFloatVector",
             "INT64": "Int64",
             "BigInt": "Int64",
             "DOUBLE": "Double",
@@ -931,6 +1139,8 @@ class MilvusVectorDBStorage(BaseVectorStorage):
         # For collections with vector field, check basic compatibility
         # Only check for critical incompatibilities, not missing optional fields
         critical_fields = {"id": {"type": "VarChar", "is_primary": True}}
+        if self.hybrid_search_config.enable_sparse:
+            critical_fields[SPARSE_VECTOR_FIELD_NAME] = {"type": "SparseFloatVector"}
 
         incompatible_fields = []
 
@@ -1366,11 +1576,19 @@ class MilvusVectorDBStorage(BaseVectorStorage):
         index_config_params = {
             k: v for k, v in kwargs.items() if k in index_config_keys
         }
+        hybrid_config_keys = MilvusHybridSearchConfig.get_config_field_names()
+        hybrid_config_params = {
+            k: v for k, v in kwargs.items() if k in hybrid_config_keys
+        }
 
         # Initialize index configuration (if not already set)
         # Configuration priority: init params from kwargs > environment variables > defaults
         if not hasattr(self, "index_config") or self.index_config is None:
             self.index_config = MilvusIndexConfig(**index_config_params)
+        if not hasattr(self, "hybrid_search_config") or self.hybrid_search_config is None:
+            self.hybrid_search_config = MilvusHybridSearchConfig(
+                **hybrid_config_params
+            )
 
         # Check for MILVUS_WORKSPACE environment variable first (higher priority)
         # This allows administrators to force a specific workspace for all Milvus storage instances
@@ -1416,6 +1634,116 @@ class MilvusVectorDBStorage(BaseVectorStorage):
         self._client = None
         self._max_batch_size = self.global_config["embedding_batch_num"]
         self._initialized = False
+
+    @staticmethod
+    def _contains_cjk(token: str) -> bool:
+        return any("\u3400" <= char <= "\u9fff" for char in token)
+
+    def _tokenize_for_sparse_vector(self, text: str) -> list[str]:
+        normalized_text = (text or "").strip().lower()
+        if not normalized_text:
+            return ["__empty__"]
+
+        tokens: list[str] = []
+        for match in SPARSE_TOKEN_PATTERN.finditer(normalized_text):
+            token = match.group(0)
+            if not token:
+                continue
+
+            if self._contains_cjk(token):
+                chars = [char for char in token if char.strip()]
+                tokens.extend(chars)
+                tokens.extend(
+                    "".join(chars[i : i + 2]) for i in range(max(len(chars) - 1, 0))
+                )
+                continue
+
+            if len(token) >= self.hybrid_search_config.sparse_min_token_length:
+                tokens.append(token)
+
+        if not tokens:
+            tokens.append(normalized_text[:64])
+
+        return tokens
+
+    @staticmethod
+    def _stable_sparse_token_id(token: str) -> int:
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        return int.from_bytes(digest, byteorder="little", signed=False) % SPARSE_HASH_SPACE
+
+    def _build_sparse_vector(self, text: str) -> dict[int, float]:
+        token_counts = Counter(self._tokenize_for_sparse_vector(text))
+        sparse_vector: dict[int, float] = {}
+
+        for token, count in token_counts.items():
+            token_id = self._stable_sparse_token_id(token)
+            weight = 1.0 + math.log(float(count))
+            sparse_vector[token_id] = sparse_vector.get(token_id, 0.0) + weight
+
+        if len(sparse_vector) > self.hybrid_search_config.sparse_max_features:
+            sparse_items = sorted(
+                sparse_vector.items(), key=lambda item: (-item[1], item[0])
+            )[: self.hybrid_search_config.sparse_max_features]
+            sparse_vector = dict(sparse_items)
+
+        norm = math.sqrt(sum(value * value for value in sparse_vector.values()))
+        if norm > 0:
+            sparse_vector = {
+                token_id: float(value / norm)
+                for token_id, value in sparse_vector.items()
+            }
+
+        return sparse_vector or {0: 1.0}
+
+    def _build_hybrid_ranker(self):
+        if self.hybrid_search_config.hybrid_ranker == "RRFRanker":
+            return RRFRanker(self.hybrid_search_config.hybrid_ranker_k)
+
+        return WeightedRanker(
+            self.hybrid_search_config.sparse_weight,
+            self.hybrid_search_config.dense_weight,
+        )
+
+    def _build_dense_search_params(self, include_radius: bool = True) -> dict[str, Any]:
+        search_params_base = self.index_config.build_search_params()
+        params = dict(search_params_base.get("params", {}))
+        if include_radius:
+            params["radius"] = self.cosine_better_than_threshold
+
+        return {
+            "metric_type": self.index_config.metric_type,
+            "params": params,
+        }
+
+    @staticmethod
+    def _normalize_search_results(results: Any) -> list[dict[str, Any]]:
+        hits = results[0] if results else []
+        normalized_results: list[dict[str, Any]] = []
+
+        for hit in hits:
+            if isinstance(hit, dict):
+                entity = hit.get("entity") or {}
+                normalized_results.append(
+                    {
+                        **entity,
+                        "id": hit.get("id"),
+                        "distance": hit.get("distance"),
+                        "created_at": hit.get("created_at", entity.get("created_at")),
+                    }
+                )
+                continue
+
+            entity = getattr(hit, "entity", {}) or {}
+            normalized_results.append(
+                {
+                    **entity,
+                    "id": getattr(hit, "id", None),
+                    "distance": getattr(hit, "distance", None),
+                    "created_at": entity.get("created_at"),
+                }
+            )
+
+        return normalized_results
 
     async def initialize(self):
         """Initialize Milvus collection"""
@@ -1486,6 +1814,8 @@ class MilvusVectorDBStorage(BaseVectorStorage):
         embeddings = np.concatenate(embeddings_list)
         for i, d in enumerate(list_data):
             d["vector"] = embeddings[i]
+            if self.hybrid_search_config.enable_sparse:
+                d[SPARSE_VECTOR_FIELD_NAME] = self._build_sparse_vector(contents[i])
         results = self._client.upsert(
             collection_name=self.final_namespace, data=list_data
         )
@@ -1507,35 +1837,38 @@ class MilvusVectorDBStorage(BaseVectorStorage):
 
         # Include all meta_fields (created_at is now always included)
         output_fields = list(self.meta_fields)
-
-        # Build search params from index config
-        search_params_base = self.index_config.build_search_params()
-
-        # Merge with metric type and radius threshold
-        search_params = {
-            "metric_type": self.index_config.metric_type,
-            "params": {
-                **search_params_base.get("params", {}),
-                "radius": self.cosine_better_than_threshold,
-            },
-        }
+        if self.hybrid_search_config.enable_hybrid_search:
+            request_limit = self.hybrid_search_config.build_request_limit(top_k)
+            sparse_query = self._build_sparse_vector(query)
+            dense_request = AnnSearchRequest(
+                data=embedding,
+                anns_field="vector",
+                param=self._build_dense_search_params(include_radius=False),
+                limit=request_limit,
+            )
+            sparse_request = AnnSearchRequest(
+                data=[sparse_query],
+                anns_field=SPARSE_VECTOR_FIELD_NAME,
+                param={"metric_type": "IP", "params": {}},
+                limit=request_limit,
+            )
+            results = self._client.hybrid_search(
+                collection_name=self.final_namespace,
+                reqs=[sparse_request, dense_request],
+                ranker=self._build_hybrid_ranker(),
+                limit=top_k,
+                output_fields=output_fields,
+            )
+            return self._normalize_search_results(results)
 
         results = self._client.search(
             collection_name=self.final_namespace,
             data=embedding,
             limit=top_k,
             output_fields=output_fields,
-            search_params=search_params,
+            search_params=self._build_dense_search_params(include_radius=True),
         )
-        return [
-            {
-                **dp["entity"],
-                "id": dp["id"],
-                "distance": dp["distance"],
-                "created_at": dp.get("created_at"),
-            }
-            for dp in results[0]
-        ]
+        return self._normalize_search_results(results)
 
     async def index_done_callback(self) -> None:
         # Milvus handles persistence automatically

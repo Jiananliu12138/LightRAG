@@ -10,6 +10,11 @@ from typing import Any
 import numpy as np
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from milvus_lite_config import (
+    MilvusLiteConfig,
+    build_milvus_vector_storage_kwargs,
+    configure_local_milvus_lite,
+)
 
 os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +77,7 @@ class RunConfig:
     query_input_path: str | None = None
     question: str = "Who is George V?"
     mode: str = "hybrid"
+    vector_storage: str = "MilvusVectorDBStorage"
     working_dir: str = str(WORKING_DIR)
     output_path: str = str(OUTPUT_PATH)
     llm: OpenAICompatibleLLMConfig = field(
@@ -94,6 +100,7 @@ class RunConfig:
         )
     )
     rerank: RerankConfig = field(default_factory=RerankConfig)
+    milvus: MilvusLiteConfig = field(default_factory=MilvusLiteConfig)
 
 
 CONFIG = RunConfig()
@@ -670,6 +677,7 @@ async def run() -> None:
     from lightrag.utils import EmbeddingFunc
 
     config = CONFIG
+    milvus_db_path = configure_local_milvus_lite(config.working_dir, config.milvus)
     embedding_config = config.embedding
     embedding_func_impl = partial(
         bge_openai_compatible_embed,
@@ -696,10 +704,15 @@ async def run() -> None:
         min_rerank_score=config.rerank.min_score,
         max_parallel_insert=10,
         default_llm_timeout=config.llm.timeout,
+        vector_storage=config.vector_storage,
+        vector_db_storage_cls_kwargs=build_milvus_vector_storage_kwargs(
+            config.milvus
+        ),
     )
 
     await rag.initialize_storages()
     try:
+        print(f"Milvus Lite DB: {milvus_db_path}")
         custom_chunk_payloads = load_custom_chunk_payloads(config)
         custom_chunk_payloads, skipped_chunks = filter_invalid_custom_chunk_payloads(
             custom_chunk_payloads
