@@ -181,6 +181,27 @@ def load_custom_chunk_payloads(config: RunConfig) -> list[dict[str, Any]]:
     return payloads
 
 
+def expand_custom_chunk_payloads_by_doc_id(
+    payloads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    from lightrag.lightrag import _split_custom_chunks_payload_by_doc_id
+
+    expanded_payloads: list[dict[str, Any]] = []
+    for payload in payloads:
+        grouped_payloads = _split_custom_chunks_payload_by_doc_id(
+            full_text=payload,
+            text_chunks=None,
+            doc_id=None,
+            file_path=None,
+        )
+        if grouped_payloads:
+            expanded_payloads.extend(grouped_payloads)
+        else:
+            expanded_payloads.append(payload)
+
+    return expanded_payloads
+
+
 def is_query_record(payload: Any) -> bool:
     return isinstance(payload, dict) and any(
         key in payload for key in ("user_input", "question", "query")
@@ -714,6 +735,9 @@ async def run() -> None:
     try:
         print(f"Milvus Lite DB: {milvus_db_path}")
         custom_chunk_payloads = load_custom_chunk_payloads(config)
+        custom_chunk_payloads = expand_custom_chunk_payloads_by_doc_id(
+            custom_chunk_payloads
+        )
         custom_chunk_payloads, skipped_chunks = filter_invalid_custom_chunk_payloads(
             custom_chunk_payloads
         )
