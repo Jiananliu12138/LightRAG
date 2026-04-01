@@ -232,35 +232,73 @@ async def run_query_records(
 ) -> list[dict[str, Any]]:
     total = len(query_records)
     max_parallel_queries = max(1, config.max_parallel_queries)
-    semaphore = asyncio.Semaphore(max_parallel_queries)
-    progress_lock = asyncio.Lock()
-    completed = 0
+    worker_count = min(max_parallel_queries, total)
 
-    async def run_single_query(
-        index: int,
-        query_record: dict[str, Any],
-    ) -> dict[str, Any]:
+    print("\n=== Query Execution ===")
+    print(f"Pending queries: {total}")
+    print(f"Parallel query workers: {worker_count}")
+
+    queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue()
+    for index, query_record in enumerate(query_records, start=1):
+        queue.put_nowait((index, query_record))
+    for _ in range(worker_count):
+        queue.put_nowait(None)
+
+    results: list[dict[str, Any] | None] = [None] * total
+    progress_lock = asyncio.Lock()
+    error_lock = asyncio.Lock()
+    completed = 0
+    query_errors: list[Exception] = []
+    stop_event = asyncio.Event()
+
+    async def worker(worker_index: int) -> None:
         nonlocal completed
 
-        async with semaphore:
-            print(f"Running query {index}/{total}")
-            result = await rag.aquery_llm(
-                query_record["user_input"],
-                param=query_param_factory(),
-            )
-            output_record = build_output_record(query_record, result)
+        while True:
+            item = await queue.get()
+            try:
+                if item is None:
+                    return
 
-        async with progress_lock:
-            completed += 1
-            print(f"Completed query {index}/{total} ({completed}/{total})")
+                if stop_event.is_set():
+                    continue
 
-        return output_record
+                index, query_record = item
+                print(
+                    f"[worker {worker_index}] Running query {index}/{total}: "
+                    f"{query_record['user_input']}"
+                )
+                result = await rag.aquery_llm(
+                    query_record["user_input"],
+                    param=query_param_factory(),
+                )
+                results[index - 1] = build_output_record(query_record, result)
 
-    tasks = [
-        asyncio.create_task(run_single_query(index, query_record))
-        for index, query_record in enumerate(query_records, start=1)
+                async with progress_lock:
+                    completed += 1
+                    print(
+                        f"[worker {worker_index}] Completed query {index}/{total} "
+                        f"({completed}/{total})"
+                    )
+            except Exception as exc:
+                async with error_lock:
+                    query_errors.append(exc)
+                    stop_event.set()
+            finally:
+                queue.task_done()
+
+    workers = [
+        asyncio.create_task(worker(worker_index))
+        for worker_index in range(1, worker_count + 1)
     ]
-    return await asyncio.gather(*tasks)
+
+    await queue.join()
+    await asyncio.gather(*workers, return_exceptions=True)
+
+    if query_errors:
+        raise query_errors[0]
+
+    return [result for result in results if result is not None]
 
 
 _tokenizer = None

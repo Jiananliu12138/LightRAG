@@ -8,6 +8,7 @@ from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any
 import numpy as np
+from dotenv import load_dotenv
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from milvus_lite_config import (
@@ -20,6 +21,8 @@ os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKING_DIR = Path(__file__).resolve().parent / "rag_storage" / "2wikimqa"
 OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "query_result"
+
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 WORKING_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -71,12 +74,65 @@ class SkippedChunkInfo:
     reason: str
 
 
+@dataclass
+class CustomChunkInsertProgress:
+    total_documents: int
+    max_parallel_insert: int
+    llm_model_max_async: int
+    started_documents: int = 0
+    completed_documents: int = 0
+    failed_documents: int = 0
+    active_documents: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def finished_documents(self) -> int:
+        return self.completed_documents + self.failed_documents
+
+    def render_bar(self, width: int = 28) -> str:
+        if self.total_documents <= 0:
+            return "[" + ("#" * width) + "]"
+
+        progress_ratio = min(1.0, self.finished_documents / self.total_documents)
+        filled = int(progress_ratio * width)
+        if self.finished_documents > 0 and filled == 0:
+            filled = 1
+        return f"[{'#' * filled}{'-' * (width - filled)}]"
+
+    def render_summary(self) -> str:
+        return (
+            f"{self.render_bar()} finished={self.finished_documents}/{self.total_documents} "
+            f"completed={self.completed_documents} failed={self.failed_documents} "
+            f"active={len(self.active_documents)}/{self.max_parallel_insert} "
+            f"MAX_PARALLEL_INSERT={self.max_parallel_insert} "
+            f"MAX_ASYNC={self.llm_model_max_async}"
+        )
+
+    def render_active_documents(self, limit: int = 5) -> str | None:
+        if not self.active_documents:
+            return None
+
+        active_items = list(self.active_documents.items())[:limit]
+        active_text = ", ".join(
+            f"{position}:{doc_id}" for doc_id, position in active_items
+        )
+        remaining = len(self.active_documents) - len(active_items)
+        if remaining > 0:
+            active_text = f"{active_text}, ... (+{remaining} more)"
+        return f"Active documents: {active_text}"
+
+
 @dataclass(frozen=True)
 class RunConfig:
     chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/test_database/3.9/2wikimqa_lumber_chunk_Qwen2.5-7B-Instruct.json"
     query_input_path: str | None = None
     question: str = "Who is George V?"
     mode: str = "hybrid"
+    max_parallel_insert: int = field(
+        default_factory=lambda: int(os.getenv("MAX_PARALLEL_INSERT", "10"))
+    )
+    llm_model_max_async: int = field(
+        default_factory=lambda: int(os.getenv("MAX_ASYNC", "10"))
+    )
     vector_storage: str = "MilvusVectorDBStorage"
     working_dir: str = str(WORKING_DIR)
     output_path: str = str(OUTPUT_PATH)
@@ -385,6 +441,224 @@ def summarize_custom_chunk_payloads(payloads: list[dict[str, Any]]) -> tuple[int
                 doc_ids.add(str(chunk_doc_id))
 
     return payload_count, len(doc_ids), chunk_count
+
+
+def resolve_custom_chunk_payload_identity(
+    payload: dict[str, Any],
+) -> tuple[str, str]:
+    from lightrag.lightrag import _normalize_custom_chunks_payload
+
+    _, doc_key, normalized_file_path, _ = _normalize_custom_chunks_payload(
+        full_text=payload,
+        text_chunks=None,
+        doc_id=None,
+        file_path=None,
+    )
+    return doc_key, normalized_file_path
+
+
+def group_custom_chunk_payloads_by_doc_id(
+    payloads: list[dict[str, Any]],
+) -> tuple[list[list[dict[str, Any]]], list[tuple[str, str, int]]]:
+    grouped_payloads: dict[str, list[dict[str, Any]]] = {}
+    ordered_doc_keys: list[str] = []
+    doc_file_paths: dict[str, str] = {}
+
+    for payload in payloads:
+        doc_key, normalized_file_path = resolve_custom_chunk_payload_identity(payload)
+        if doc_key not in grouped_payloads:
+            grouped_payloads[doc_key] = []
+            ordered_doc_keys.append(doc_key)
+            doc_file_paths[doc_key] = normalized_file_path
+        grouped_payloads[doc_key].append(payload)
+
+    ordered_groups = [grouped_payloads[doc_key] for doc_key in ordered_doc_keys]
+    duplicate_doc_groups = [
+        (doc_key, doc_file_paths[doc_key], len(grouped_payloads[doc_key]))
+        for doc_key in ordered_doc_keys
+        if len(grouped_payloads[doc_key]) > 1
+    ]
+    return ordered_groups, duplicate_doc_groups
+
+
+async def insert_custom_chunk_payloads(
+    rag: Any,
+    payloads: list[dict[str, Any]],
+    *,
+    max_parallel_payloads: int,
+) -> None:
+    if not payloads:
+        return
+
+    payload_groups, duplicate_doc_groups = group_custom_chunk_payloads_by_doc_id(
+        payloads
+    )
+    effective_max_parallel_insert = max(
+        1, int(getattr(rag, "max_parallel_insert", max_parallel_payloads))
+    )
+    effective_llm_model_max_async = max(
+        1, int(getattr(rag, "llm_model_max_async", 1))
+    )
+    worker_count = min(effective_max_parallel_insert, len(payload_groups))
+    progress = CustomChunkInsertProgress(
+        total_documents=len(payload_groups),
+        max_parallel_insert=effective_max_parallel_insert,
+        llm_model_max_async=effective_llm_model_max_async,
+    )
+    progress_lock = asyncio.Lock()
+
+    print("\n=== Custom Chunk Insert Execution ===")
+    print(f"Pending payloads: {len(payloads)}")
+    print(f"Document groups: {len(payload_groups)}")
+    print(f"Parallel document workers: {worker_count}")
+    print(f"Effective MAX_PARALLEL_INSERT: {effective_max_parallel_insert}")
+    print(f"Effective MAX_ASYNC: {effective_llm_model_max_async}")
+    print(
+        "Concurrency alignment: runner controls document-level parallelism; "
+        "LightRAG keeps per-document extraction and graph-merge parallelism."
+    )
+    print(f"Progress {progress.render_summary()}")
+
+    if duplicate_doc_groups:
+        print(
+            "Repeated doc_ids detected; those payloads will stay sequential within the same document."
+        )
+        for doc_key, file_path, count in duplicate_doc_groups[:10]:
+            print(f"  doc_id={doc_key} file_path={file_path} payloads={count}")
+        if len(duplicate_doc_groups) > 10:
+            print(f"  ... and {len(duplicate_doc_groups) - 10} more")
+
+    queue: asyncio.Queue[tuple[int, list[dict[str, Any]]] | None] = asyncio.Queue()
+    for group_index, payload_group in enumerate(payload_groups, start=1):
+        queue.put_nowait((group_index, payload_group))
+    for _ in range(worker_count):
+        queue.put_nowait(None)
+
+    insert_errors: list[Exception] = []
+    error_lock = asyncio.Lock()
+    stop_event = asyncio.Event()
+
+    async def print_progress_event(
+        *,
+        event: str,
+        worker_index: int,
+        group_index: int,
+        doc_key: str,
+        normalized_file_path: str,
+        payload_count: int,
+        error: Exception | None = None,
+    ) -> None:
+        async with progress_lock:
+            document_position = f"{group_index}/{len(payload_groups)}"
+
+            if event == "start":
+                progress.started_documents += 1
+                progress.active_documents[doc_key] = document_position
+                print(
+                    f"[worker {worker_index}] PROCESSING document {document_position}: "
+                    f"doc_id={doc_key} payloads={payload_count} "
+                    f"file_path={normalized_file_path}"
+                )
+            elif event == "complete":
+                progress.active_documents.pop(doc_key, None)
+                progress.completed_documents += 1
+                print(
+                    f"[worker {worker_index}] COMPLETED document {document_position}: "
+                    f"doc_id={doc_key} file_path={normalized_file_path}"
+                )
+            elif event == "failed":
+                progress.active_documents.pop(doc_key, None)
+                progress.failed_documents += 1
+                print(
+                    f"[worker {worker_index}] FAILED document {document_position}: "
+                    f"doc_id={doc_key} file_path={normalized_file_path} error={error}"
+                )
+
+            print(f"Progress {progress.render_summary()}")
+            active_line = progress.render_active_documents()
+            if active_line:
+                print(active_line)
+
+    async def worker(worker_index: int) -> None:
+        while True:
+            item = await queue.get()
+            doc_started = False
+            doc_key = "unknown_doc"
+            normalized_file_path = "unknown_source"
+            payload_group: list[dict[str, Any]] = []
+            group_index = 0
+            try:
+                if item is None:
+                    return
+
+                if stop_event.is_set():
+                    continue
+
+                group_index, payload_group = item
+                doc_key, normalized_file_path = resolve_custom_chunk_payload_identity(
+                    payload_group[0]
+                )
+                await print_progress_event(
+                    event="start",
+                    worker_index=worker_index,
+                    group_index=group_index,
+                    doc_key=doc_key,
+                    normalized_file_path=normalized_file_path,
+                    payload_count=len(payload_group),
+                )
+                doc_started = True
+
+                for payload in payload_group:
+                    if stop_event.is_set():
+                        break
+                    await rag.ainsert_custom_chunks(
+                        payload,
+                        current_file_number=group_index,
+                        total_files=len(payload_groups),
+                    )
+
+                if not stop_event.is_set():
+                    await print_progress_event(
+                        event="complete",
+                        worker_index=worker_index,
+                        group_index=group_index,
+                        doc_key=doc_key,
+                        normalized_file_path=normalized_file_path,
+                        payload_count=len(payload_group),
+                    )
+            except Exception as exc:
+                if doc_started:
+                    await print_progress_event(
+                        event="failed",
+                        worker_index=worker_index,
+                        group_index=group_index,
+                        doc_key=doc_key,
+                        normalized_file_path=normalized_file_path,
+                        payload_count=len(payload_group),
+                        error=exc,
+                    )
+                async with error_lock:
+                    insert_errors.append(exc)
+                    stop_event.set()
+            finally:
+                queue.task_done()
+
+    workers = [
+        asyncio.create_task(worker(worker_index))
+        for worker_index in range(1, worker_count + 1)
+    ]
+
+    await queue.join()
+    await asyncio.gather(*workers, return_exceptions=True)
+
+    print("\n=== Custom Chunk Insert Summary ===")
+    print(f"Progress {progress.render_summary()}")
+    active_line = progress.render_active_documents()
+    if active_line:
+        print(active_line)
+
+    if insert_errors:
+        raise insert_errors[0]
 
 
 @lru_cache(maxsize=4)
@@ -715,6 +989,8 @@ async def run() -> None:
         func=embedding_func_impl,
     )
     rerank_model_func = build_rerank_model_func(config)
+    max_parallel_insert = max(1, config.max_parallel_insert)
+    llm_model_max_async = max(1, config.llm_model_max_async)
 
     rag = LightRAG(
         working_dir=config.working_dir,
@@ -723,7 +999,8 @@ async def run() -> None:
         embedding_func=embedding_func,
         rerank_model_func=rerank_model_func,
         min_rerank_score=config.rerank.min_score,
-        max_parallel_insert=10,
+        llm_model_max_async=llm_model_max_async,
+        max_parallel_insert=max_parallel_insert,
         default_llm_timeout=config.llm.timeout,
         vector_storage=config.vector_storage,
         vector_db_storage_cls_kwargs=build_milvus_vector_storage_kwargs(
@@ -757,6 +1034,8 @@ async def run() -> None:
                 f"Embedding tokenizer: {embedding_config.model}  "
                 f"Limit: {embedding_config.max_token_size}"
             )
+            print(f"Max parallel insert: {max_parallel_insert}")
+            print(f"LLM max async: {llm_model_max_async}")
 
             if skipped_chunks:
                 for skipped in skipped_chunks[:5]:
@@ -810,8 +1089,11 @@ async def run() -> None:
                 if len(existing_payloads) > 10:
                     print(f"  ... and {len(existing_payloads) - 10} more")
 
-            for payload in custom_chunk_payloads:
-                await rag.ainsert_custom_chunks(payload)
+            await insert_custom_chunk_payloads(
+                rag,
+                custom_chunk_payloads,
+                max_parallel_payloads=max_parallel_insert,
+            )
 
         query_records = load_query_records(config)
         results: list[dict[str, Any]] = []

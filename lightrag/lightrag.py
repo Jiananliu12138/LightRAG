@@ -323,16 +323,12 @@ def _split_custom_chunks_payload_by_doc_id(
 ) -> list[dict[str, Any]]:
     """Split a multi-document custom chunk payload into one payload per doc_id."""
 
-    payload_full_text = full_text
     payload_chunks = text_chunks
     payload_doc_id = doc_id
     payload_file_path = file_path or "unknown_source"
 
     if isinstance(full_text, dict):
         payload = full_text
-        payload_full_text = payload.get(
-            "full_text", payload.get("text", payload.get("content"))
-        )
         payload_chunks = payload.get("splits", text_chunks)
         payload_doc_id = payload.get(
             "doc_id", payload.get("full_doc_id", payload_doc_id)
@@ -850,11 +846,6 @@ class LightRAG:
             "cosine_better_than_threshold": self.cosine_better_than_threshold,
             **self.vector_db_storage_cls_kwargs,
         }
-        # Reuse the same document-level parallelism cap for custom chunk inserts.
-        self._custom_chunk_insert_semaphore = asyncio.Semaphore(
-            max(1, self.max_parallel_insert)
-        )
-
         # Init Tokenizer
         # Post-initialization hook to handle backward compatabile tokenizer initialization based on provided parameters
         if self.tokenizer is None:
@@ -1591,7 +1582,6 @@ class LightRAG:
             "cancellation_requested": False,
         }
         pipeline_status_lock = asyncio.Lock()
-        semaphore_acquired = False
 
         try:
             if track_id is None:
@@ -1605,23 +1595,16 @@ class LightRAG:
             )
             if grouped_payloads:
                 grouped_total_files = len(grouped_payloads)
-                await asyncio.gather(
-                    *(
-                        self.ainsert_custom_chunks(
-                            grouped_payload,
-                            track_id=track_id,
-                            current_file_number=grouped_index,
-                            total_files=grouped_total_files,
-                        )
-                        for grouped_index, grouped_payload in enumerate(
-                            grouped_payloads, start=1
-                        )
+                for grouped_index, grouped_payload in enumerate(
+                    grouped_payloads, start=1
+                ):
+                    await self.ainsert_custom_chunks(
+                        grouped_payload,
+                        track_id=track_id,
+                        current_file_number=grouped_index,
+                        total_files=grouped_total_files,
                     )
-                )
                 return track_id
-
-            await self._custom_chunk_insert_semaphore.acquire()
-            semaphore_acquired = True
 
             (
                 normalized_full_text,
@@ -1755,6 +1738,17 @@ class LightRAG:
                 }
             }
 
+            logger.info(
+                "Custom chunk processing %s/%s entering PROCESSING: doc_id=%s, file_path=%s, chunks=%s, MAX_PARALLEL_INSERT=%s, MAX_ASYNC=%s",
+                current_file_number,
+                total_files,
+                doc_key,
+                normalized_file_path,
+                len(inserting_chunks),
+                self.max_parallel_insert,
+                self.llm_model_max_async,
+            )
+
             await asyncio.gather(
                 self.full_docs.upsert(new_docs),
                 self.doc_status.upsert(doc_status_payload),
@@ -1806,6 +1800,13 @@ class LightRAG:
                     }
                 }
             )
+            logger.info(
+                "Custom chunk processing %s/%s completed: doc_id=%s, file_path=%s",
+                current_file_number,
+                total_files,
+                doc_key,
+                normalized_file_path,
+            )
             return track_id
 
         except Exception as e:
@@ -1830,6 +1831,14 @@ class LightRAG:
                         }
                     }
                 )
+                logger.error(
+                    "Custom chunk processing %s/%s failed: doc_id=%s, file_path=%s, error=%s",
+                    current_file_number,
+                    total_files,
+                    doc_key,
+                    normalized_file_path,
+                    e,
+                )
             raise
 
         finally:
@@ -1838,8 +1847,6 @@ class LightRAG:
                     pipeline_status=pipeline_status,
                     pipeline_status_lock=pipeline_status_lock,
                 )
-            if semaphore_acquired:
-                self._custom_chunk_insert_semaphore.release()
 
     async def apipeline_enqueue_documents(
         self,

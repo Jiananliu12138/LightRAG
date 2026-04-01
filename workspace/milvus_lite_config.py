@@ -8,7 +8,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class MilvusLiteConfig:
-    uri: str | None = "F:\thesis\LightRAG\workspace\rag_storage_milvus"
+    uri: str | None = "/data/h50056789/LightRAG/workspace/rag_storage_milvus/LightRAG/LightRAG.db"
     index_type: str = "AUTOINDEX"
     enable_sparse: bool = True
     enable_hybrid_search: bool = True
