@@ -19,8 +19,8 @@ from milvus_lite_config import (
 
 os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-WORKING_DIR = Path(__file__).resolve().parent / "rag_storage" / "2wikimqa"
-OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "query_result"
+WORKING_DIR = Path(__file__).resolve().parent / "rag_storage_milvus" / "LightRAG"
+OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "test.json"
 
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
@@ -37,8 +37,8 @@ class OpenAICompatibleLLMConfig:
     base_url: str
     api_key: str = "EMPTY"
     timeout: int = 3600
-    temperature: float | None = 0.2
-    max_tokens: int | None = 4096
+    temperature: float | None = 0.0
+    max_tokens: int | None = 8192
     extra_body: dict[str, Any] = field(default_factory=dict)
 
 
@@ -123,10 +123,10 @@ class CustomChunkInsertProgress:
 
 @dataclass(frozen=True)
 class RunConfig:
-    chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/test_database/3.9/2wikimqa_lumber_chunk_Qwen2.5-7B-Instruct.json"
+    chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/Chunk_Result/Lightrag_Chunk/2wikimqa_lightrag_chunk.json"
     query_input_path: str | None = None
-    question: str = "Who is George V?"
-    mode: str = "hybrid"
+    question: str = "Which country the director of film Renegade Force is from?"
+    mode: str = "mix"
     max_parallel_insert: int = field(
         default_factory=lambda: int(os.getenv("MAX_PARALLEL_INSERT", "10"))
     )
@@ -138,11 +138,11 @@ class RunConfig:
     output_path: str = str(OUTPUT_PATH)
     llm: OpenAICompatibleLLMConfig = field(
         default_factory=lambda: OpenAICompatibleLLMConfig(
-            model="Qwen2.5-7B-Instruct",
-            base_url="http://127.0.0.1:8005/v1",
+            model="Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+            base_url="http://127.0.0.1:8001/v1",
             api_key="EMPTY",
-            temperature=0.2,
-            max_tokens=14096,
+            temperature=0.0,
+            max_tokens=8192,
             extra_body={},
         )
     )

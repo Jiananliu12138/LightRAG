@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable
+from dotenv import load_dotenv
 from milvus_lite_config import (
     MilvusLiteConfig,
     build_milvus_vector_storage_kwargs,
@@ -16,6 +17,8 @@ os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKING_DIR = Path(__file__).resolve().parent / "rag_storage_milvus" / "LightRAG"
 OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "test.json"
+
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 WORKING_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -61,19 +64,21 @@ class RerankConfig:
 @dataclass(frozen=True)
 class RunConfig:
     query_input_path: str | None = None
-    question: str = "Who is George V?"
-    mode: str = "hybrid"
-    max_parallel_queries: int = 10
+    question: str = ""
+    mode: str = "mix"
+    max_parallel_queries: int = field(
+        default_factory=lambda: int(os.getenv("MAX_PARALLEL_QUERIES", "10"))
+    )
     vector_storage: str = "MilvusVectorDBStorage"
     working_dir: str = str(WORKING_DIR)
     output_path: str = str(OUTPUT_PATH)
     llm: OpenAICompatibleLLMConfig = field(
         default_factory=lambda: OpenAICompatibleLLMConfig(
-            model="Qwen2.5-7B-Instruct",
-            base_url="http://127.0.0.1:8005/v1",
+            model="Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+            base_url="http://127.0.0.1:8001/v1",
             api_key="EMPTY",
-            temperature=0.2,
-            max_tokens=4096,
+            temperature=0.0,
+            max_tokens=8192,
             extra_body={},
         )
     )
