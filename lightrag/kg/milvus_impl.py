@@ -1973,9 +1973,11 @@ class MilvusVectorDBStorage(BaseVectorStorage):
             # Delete vectors by IDs
             result = self._client.delete(collection_name=self.final_namespace, pks=ids)
 
-            if result and result.get("delete_count", 0) > 0:
+            # pymilvus MilvusClient.delete() returns a list of deleted PKs (not a dict)
+            deleted_count = len(result) if isinstance(result, list) else (result.get("delete_count", 0) if isinstance(result, dict) else 0)
+            if deleted_count > 0:
                 logger.debug(
-                    f"[{self.workspace}] Successfully deleted {result.get('delete_count', 0)} vectors from {self.namespace}"
+                    f"[{self.workspace}] Successfully deleted {deleted_count} vectors from {self.namespace}"
                 )
             else:
                 logger.debug(

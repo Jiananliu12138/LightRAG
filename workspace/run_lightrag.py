@@ -536,7 +536,6 @@ async def insert_custom_chunk_payloads(
 
     insert_errors: list[Exception] = []
     error_lock = asyncio.Lock()
-    stop_event = asyncio.Event()
 
     async def print_progress_event(
         *,
@@ -591,9 +590,6 @@ async def insert_custom_chunk_payloads(
                 if item is None:
                     return
 
-                if stop_event.is_set():
-                    continue
-
                 group_index, payload_group = item
                 doc_key, normalized_file_path = resolve_custom_chunk_payload_identity(
                     payload_group[0]
@@ -609,23 +605,20 @@ async def insert_custom_chunk_payloads(
                 doc_started = True
 
                 for payload in payload_group:
-                    if stop_event.is_set():
-                        break
                     await rag.ainsert_custom_chunks(
                         payload,
                         current_file_number=group_index,
                         total_files=len(payload_groups),
                     )
 
-                if not stop_event.is_set():
-                    await print_progress_event(
-                        event="complete",
-                        worker_index=worker_index,
-                        group_index=group_index,
-                        doc_key=doc_key,
-                        normalized_file_path=normalized_file_path,
-                        payload_count=len(payload_group),
-                    )
+                await print_progress_event(
+                    event="complete",
+                    worker_index=worker_index,
+                    group_index=group_index,
+                    doc_key=doc_key,
+                    normalized_file_path=normalized_file_path,
+                    payload_count=len(payload_group),
+                )
             except Exception as exc:
                 if doc_started:
                     await print_progress_event(
@@ -639,7 +632,7 @@ async def insert_custom_chunk_payloads(
                     )
                 async with error_lock:
                     insert_errors.append(exc)
-                    stop_event.set()
+                # Continue processing remaining documents instead of stopping
             finally:
                 queue.task_done()
 
@@ -658,7 +651,11 @@ async def insert_custom_chunk_payloads(
         print(active_line)
 
     if insert_errors:
-        raise insert_errors[0]
+        print(f"\n{len(insert_errors)} document(s) failed during insertion:")
+        for i, err in enumerate(insert_errors[:10], 1):
+            print(f"  [{i}] {err}")
+        if len(insert_errors) > 10:
+            print(f"  ... and {len(insert_errors) - 10} more")
 
 
 @lru_cache(maxsize=4)
@@ -805,6 +802,30 @@ def truncate_text_by_tokenizer_limit(
     return content[:end_offset]
 
 
+_embedding_client: Any = None
+_embedding_client_key: tuple | None = None
+
+
+def _get_embedding_client(
+    api_key: str,
+    base_url: str,
+    client_configs: dict[str, Any] | None = None,
+) -> Any:
+    """Reuse a single AsyncOpenAI client for embedding to avoid per-call TCP overhead."""
+    from lightrag.llm.openai import create_openai_async_client
+
+    global _embedding_client, _embedding_client_key
+    key = (api_key, base_url, frozenset((client_configs or {}).items()))
+    if _embedding_client is None or _embedding_client_key != key:
+        _embedding_client = create_openai_async_client(
+            api_key=api_key,
+            base_url=base_url,
+            client_configs=client_configs,
+        )
+        _embedding_client_key = key
+    return _embedding_client
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=60),
@@ -822,7 +843,6 @@ async def bge_openai_compatible_embed(
     client_configs: dict[str, Any] | None = None,
     token_tracker: Any | None = None,
 ) -> np.ndarray:
-    from lightrag.llm.openai import create_openai_async_client
     from lightrag.utils import logger
 
     tokenizer = get_embedding_hf_tokenizer(model)
@@ -848,47 +868,35 @@ async def bge_openai_compatible_embed(
             max_token_size,
         )
 
-    openai_async_client = create_openai_async_client(
-        api_key=api_key,
-        base_url=base_url,
-        client_configs=client_configs,
-    )
+    client = _get_embedding_client(api_key, base_url, client_configs)
 
-    try:
-        async with openai_async_client:
-            api_params = {
-                "model": model,
-                "input": truncated_texts,
-                "encoding_format": "base64",
-            }
-            if embedding_dim is not None:
-                api_params["dimensions"] = embedding_dim
+    api_params = {
+        "model": model,
+        "input": truncated_texts,
+        "encoding_format": "base64",
+    }
+    if embedding_dim is not None:
+        api_params["dimensions"] = embedding_dim
 
-            response = await openai_async_client.embeddings.create(**api_params)
+    response = await client.embeddings.create(**api_params)
 
-            if token_tracker and hasattr(response, "usage"):
-                token_counts = {
-                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-                    "total_tokens": getattr(response.usage, "total_tokens", 0),
-                }
-                token_tracker.add_usage(token_counts)
+    if token_tracker and hasattr(response, "usage"):
+        token_counts = {
+            "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+            "total_tokens": getattr(response.usage, "total_tokens", 0),
+        }
+        token_tracker.add_usage(token_counts)
 
-            return np.array(
-                [
-                    np.array(dp.embedding, dtype=np.float32)
-                    if isinstance(dp.embedding, list)
-                    else np.frombuffer(
-                        base64.b64decode(dp.embedding), dtype=np.float32
-                    )
-                    for dp in response.data
-                ]
+    return np.array(
+        [
+            np.array(dp.embedding, dtype=np.float32)
+            if isinstance(dp.embedding, list)
+            else np.frombuffer(
+                base64.b64decode(dp.embedding), dtype=np.float32
             )
-    except APITimeoutError:
-        raise
-    except APIConnectionError:
-        raise
-    except RateLimitError:
-        raise
+            for dp in response.data
+        ]
+    )
 
 async def local_llm_complete(
     prompt: str,

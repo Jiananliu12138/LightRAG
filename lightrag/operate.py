@@ -1878,7 +1878,20 @@ async def _merge_nodes_then_upsert(
     else:
         logger.debug(status_message)
 
-    # 11. Update both graph and vector db
+    # 11. Check token limit before writing to graph and vector db
+    entity_content = f"{entity_name}\n{description}"
+    embedding_token_limit = global_config.get("embedding_token_limit")
+    if embedding_token_limit is not None:
+        tokenizer = global_config.get("tokenizer")
+        if tokenizer is not None:
+            content_token_count = len(tokenizer.encode(entity_content))
+            if content_token_count > int(embedding_token_limit):
+                logger.warning(
+                    f"Skipping entity '{entity_name[:80]}...' entirely — "
+                    f"content tokens ({content_token_count}) exceed embedding limit ({embedding_token_limit})."
+                )
+                return None
+
     node_data = dict(
         entity_id=entity_name,
         entity_type=entity_type,
@@ -1895,7 +1908,6 @@ async def _merge_nodes_then_upsert(
     node_data["entity_name"] = entity_name
     if entity_vdb is not None:
         entity_vdb_id = compute_mdhash_id(str(entity_name), prefix="ent-")
-        entity_content = f"{entity_name}\n{description}"
         data_for_vdb = {
             entity_vdb_id: {
                 "entity_name": entity_name,
@@ -2376,6 +2388,20 @@ async def _merge_edges_then_upsert(
                         pipeline_status["latest_message"] = status_message
                         pipeline_status["history_messages"].append(status_message)
 
+    # Check token limit before writing to graph and vector db
+    rel_content = f"{keywords}\t{src_id}\n{tgt_id}\n{description}"
+    embedding_token_limit = global_config.get("embedding_token_limit")
+    if embedding_token_limit is not None:
+        tokenizer = global_config.get("tokenizer")
+        if tokenizer is not None:
+            content_token_count = len(tokenizer.encode(rel_content))
+            if content_token_count > int(embedding_token_limit):
+                logger.warning(
+                    f"Skipping relation '{src_id}~{tgt_id}' entirely — "
+                    f"content tokens ({content_token_count}) exceed embedding limit ({embedding_token_limit})."
+                )
+                return None
+
     edge_created_at = int(time.time())
     await knowledge_graph_inst.upsert_edge(
         src_id,
@@ -2416,7 +2442,7 @@ async def _merge_edges_then_upsert(
             logger.debug(
                 f"Could not delete old relationship vector records {rel_vdb_id}, {rel_vdb_id_reverse}: {e}"
             )
-        rel_content = f"{keywords}\t{src_id}\n{tgt_id}\n{description}"
+
         vdb_data = {
             rel_vdb_id: {
                 "src_id": src_id,
@@ -2555,6 +2581,8 @@ async def merge_nodes_and_edges(
 
                     return entity_data
 
+                except PipelineCancelledException:
+                    raise  # Always propagate cancellation
                 except Exception as e:
                     error_msg = f"Error processing entity `{entity_name}`: {e}"
                     logger.error(error_msg)
@@ -2573,11 +2601,11 @@ async def merge_nodes_and_edges(
                             f"Failed to update pipeline status: {status_error}"
                         )
 
-                    # Re-raise the original exception with a prefix
-                    prefixed_exception = create_prefixed_exception(
-                        e, f"`{entity_name}`"
+                    # Skip this entity instead of crashing the entire pipeline
+                    logger.warning(
+                        f"Skipping entity `{entity_name}` due to error, continuing with remaining entities"
                     )
-                    raise prefixed_exception from e
+                    return None
 
     # Create entity processing tasks
     entity_tasks = []
@@ -2585,38 +2613,39 @@ async def merge_nodes_and_edges(
         task = asyncio.create_task(_locked_process_entity_name(entity_name, entities))
         entity_tasks.append(task)
 
-    # Execute entity tasks with error handling
+    # Execute entity tasks with error handling (tolerant mode: skip failures, don't abort)
     processed_entities = []
     if entity_tasks:
-        done, pending = await asyncio.wait(
-            entity_tasks, return_when=asyncio.FIRST_EXCEPTION
+        done, _pending = await asyncio.wait(
+            entity_tasks, return_when=asyncio.ALL_COMPLETED
         )
 
-        first_exception = None
-        processed_entities = []
+        cancellation_exception = None
+        skipped_entity_count = 0
 
         for task in done:
             try:
                 result = task.result()
+            except PipelineCancelledException as e:
+                if cancellation_exception is None:
+                    cancellation_exception = e
             except BaseException as e:
-                if first_exception is None:
-                    first_exception = e
+                skipped_entity_count += 1
+                logger.error(f"Entity task failed (skipped): {e}")
             else:
-                processed_entities.append(result)
-
-        if pending:
-            for task in pending:
-                task.cancel()
-            pending_results = await asyncio.gather(*pending, return_exceptions=True)
-            for result in pending_results:
-                if isinstance(result, BaseException):
-                    if first_exception is None:
-                        first_exception = result
-                else:
+                if result is not None:
                     processed_entities.append(result)
 
-        if first_exception is not None:
-            raise first_exception
+        if skipped_entity_count > 0:
+            skip_msg = f"Phase 1: {skipped_entity_count} entity(ies) skipped due to errors"
+            logger.warning(skip_msg)
+            if pipeline_status is not None and pipeline_status_lock is not None:
+                async with pipeline_status_lock:
+                    pipeline_status["latest_message"] = skip_msg
+                    pipeline_status["history_messages"].append(skip_msg)
+
+        if cancellation_exception is not None:
+            raise cancellation_exception
 
     # ===== Phase 2: Process all relationships concurrently =====
     log_message = f"Phase 2: Processing {total_relations_count} relations from {doc_id} (async: {graph_max_async})"
@@ -2669,6 +2698,8 @@ async def merge_nodes_and_edges(
 
                     return edge_data, added_entities
 
+                except PipelineCancelledException:
+                    raise  # Always propagate cancellation
                 except Exception as e:
                     error_msg = f"Error processing relation `{sorted_edge_key}`: {e}"
                     logger.error(error_msg)
@@ -2687,11 +2718,11 @@ async def merge_nodes_and_edges(
                             f"Failed to update pipeline status: {status_error}"
                         )
 
-                    # Re-raise the original exception with a prefix
-                    prefixed_exception = create_prefixed_exception(
-                        e, f"{sorted_edge_key}"
+                    # Skip this relation instead of crashing the entire pipeline
+                    logger.warning(
+                        f"Skipping relation `{sorted_edge_key}` due to error, continuing with remaining relations"
                     )
-                    raise prefixed_exception from e
+                    return None, []
 
     # Create relationship processing tasks
     edge_tasks = []
@@ -2699,44 +2730,42 @@ async def merge_nodes_and_edges(
         task = asyncio.create_task(_locked_process_edges(edge_key, edges))
         edge_tasks.append(task)
 
-    # Execute relationship tasks with error handling
+    # Execute relationship tasks with error handling (tolerant mode: skip failures, don't abort)
     processed_edges = []
     all_added_entities = []
 
     if edge_tasks:
-        done, pending = await asyncio.wait(
-            edge_tasks, return_when=asyncio.FIRST_EXCEPTION
+        done, _pending = await asyncio.wait(
+            edge_tasks, return_when=asyncio.ALL_COMPLETED
         )
 
-        first_exception = None
+        cancellation_exception = None
+        skipped_edge_count = 0
 
         for task in done:
             try:
                 edge_data, added_entities = task.result()
+            except PipelineCancelledException as e:
+                if cancellation_exception is None:
+                    cancellation_exception = e
             except BaseException as e:
-                if first_exception is None:
-                    first_exception = e
+                skipped_edge_count += 1
+                logger.error(f"Relation task failed (skipped): {e}")
             else:
                 if edge_data is not None:
                     processed_edges.append(edge_data)
                 all_added_entities.extend(added_entities)
 
-        if pending:
-            for task in pending:
-                task.cancel()
-            pending_results = await asyncio.gather(*pending, return_exceptions=True)
-            for result in pending_results:
-                if isinstance(result, BaseException):
-                    if first_exception is None:
-                        first_exception = result
-                else:
-                    edge_data, added_entities = result
-                    if edge_data is not None:
-                        processed_edges.append(edge_data)
-                    all_added_entities.extend(added_entities)
+        if skipped_edge_count > 0:
+            skip_msg = f"Phase 2: {skipped_edge_count} relation(s) skipped due to errors"
+            logger.warning(skip_msg)
+            if pipeline_status is not None and pipeline_status_lock is not None:
+                async with pipeline_status_lock:
+                    pipeline_status["latest_message"] = skip_msg
+                    pipeline_status["history_messages"].append(skip_msg)
 
-        if first_exception is not None:
-            raise first_exception
+        if cancellation_exception is not None:
+            raise cancellation_exception
 
     # ===== Phase 3: Update full_entities and full_relations storage =====
     if full_entities_storage and full_relations_storage and doc_id:
