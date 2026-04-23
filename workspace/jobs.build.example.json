@@ -2,13 +2,22 @@
   "_comment": "Build-only jobs for workspace/run_lightrag.py. This file controls graph construction only; query_input_path and output_path are intentionally omitted here.",
   "_usage": "python workspace/run_lightrag.py workspace/jobs.build.example.json",
   "_knob_notes": {
-    "max_parallel_insert": "Document-group concurrency used by run_lightrag.py.",
-    "llm_model_max_async": "Per-document LLM/chunk extraction concurrency inside LightRAG.",
+    "max_parallel_insert": "Document-group concurrency used by run_lightrag.py. Shares the global LLM semaphore with llm_model_max_async, so raising this alone does not increase LLM QPS.",
+    "llm_model_max_async": "Global LLM concurrency for the whole LightRAG instance (shared across all doc workers). Raising this is the only way to increase real LLM QPS.",
     "milvus.enable_sparse": "If true, sparse vectors are stored during indexing so hybrid search can be enabled later.",
-    "milvus.enable_hybrid_search": "Build jobs may keep this true to validate hybrid-capable collections; query behavior is controlled by the query jobs file."
+    "milvus.enable_hybrid_search": "Build jobs may keep this true to validate hybrid-capable collections; query behavior is controlled by the query jobs file.",
+    "logging.log_dir": "Where runner logs and LightRAG logs are written. Relative paths resolve against the jobs file's directory, so 'logs' here means 'workspace/logs'.",
+    "logging.name": "File name prefix; the actual file is '<name>_<YYYYMMDD_HHMMSS>.log'.",
+    "logging.level": "LightRAG log level (DEBUG / INFO / WARNING / ERROR).",
+    "working_dir_sharing": "If two jobs point at the SAME working_dir, they merge into one knowledge graph: same doc_ids are skipped, new doc_ids are appended. Use distinct working_dirs when comparing chunking/embedding strategies."
+  },
+  "logging": {
+    "log_dir": "logs",
+    "name": "build",
+    "level": "INFO"
   },
   "defaults": {
-    "max_parallel_insert": 10,
+    "max_parallel_insert": 3,
     "llm_model_max_async": 10,
     "vector_storage": "MilvusVectorDBStorage",
     "milvus": {

@@ -16,10 +16,12 @@ from lightrag.utils import EmbeddingFunc
 from run_lightrag import (
     OpenAICompatibleEmbeddingConfig,
     OpenAICompatibleLLMConfig,
+    _peek_logging_config,
     _resolve_jobs_file,
     bge_openai_compatible_embed,
     build_local_llm_complete,
     load_json_items,
+    setup_runner_logging,
 )
 from milvus_lite_config import (
     MilvusLiteConfig,
@@ -62,7 +64,10 @@ class QueryRunConfig:
     query_input_path: str | None = None
     question: str = "Which country the director of film Renegade Force is from?"
     mode: str = "mix"
-    max_parallel_queries: int = 1
+    # Concurrent query workers. Each worker emits ~2 LLM calls per query
+    # (keyword extract + final answer) which share LightRAG's global
+    # llm_model_max_async semaphore, so real LLM QPS is capped there.
+    max_parallel_queries: int = 5
     llm_model_max_async: int = 10
     vector_storage: str = "MilvusVectorDBStorage"
     working_dir: str = str(WORKING_DIR)
@@ -263,15 +268,17 @@ def apply_job_overrides(base: QueryRunConfig, job: dict[str, Any]) -> QueryRunCo
         "working_dir",
         "output_path",
     }
-    ignored_build_keys = {"chunk_input_path", "max_parallel_insert"}
     effective_job = {k: v for k, v in job.items() if not k.startswith("_")}
     unknown = set(effective_job) - (
         top_level_keys
-        | ignored_build_keys
         | {"llm", "embedding", "rerank", "milvus", "query", "name", "enabled"}
     )
     if unknown:
-        raise ValueError(f"Unknown job keys: {sorted(unknown)}")
+        raise ValueError(
+            f"Unknown job keys: {sorted(unknown)}. "
+            "Build-only fields (chunk_input_path, max_parallel_insert) are not "
+            "accepted here; keep them in the build jobs file instead."
+        )
 
     top_overrides = {k: effective_job[k] for k in top_level_keys if k in effective_job}
     llm = _merge_dataclass(base.llm, effective_job.get("llm"))
@@ -378,7 +385,6 @@ def build_query_rag(config: QueryRunConfig) -> tuple[LightRAG, str | None]:
         rerank_model_func=build_rerank_model_func(config),
         min_rerank_score=config.rerank.min_score,
         llm_model_max_async=max(1, config.llm_model_max_async),
-        max_parallel_insert=max(1, config.max_parallel_insert),
         default_llm_timeout=config.llm.timeout,
         vector_storage=config.vector_storage,
         vector_db_storage_cls_kwargs=build_milvus_vector_storage_kwargs(
@@ -394,7 +400,14 @@ async def run_query_records(
     *,
     max_parallel_queries: int,
     query_param_factory: Callable[[], QueryParam],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any] | None], list[tuple[int, dict[str, Any], Exception]]]:
+    """Run queries concurrently with per-query error isolation.
+
+    Returns a tuple of (results_by_index, errors). results_by_index preserves
+    the original order and contains None for failed queries so callers can
+    still cross-reference against the input list. errors is a list of
+    (1-based-index, query_record, exception).
+    """
     total = len(query_records)
     max_parallel_queries = max(1, max_parallel_queries)
     worker_count = min(max_parallel_queries, total)
@@ -404,7 +417,7 @@ async def run_query_records(
     print(f"Parallel query workers: {worker_count}")
 
     if total == 0:
-        return []
+        return [], []
 
     queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue()
     for index, query_record in enumerate(query_records, start=1):
@@ -416,41 +429,48 @@ async def run_query_records(
     progress_lock = asyncio.Lock()
     error_lock = asyncio.Lock()
     completed = 0
-    query_errors: list[Exception] = []
-    stop_event = asyncio.Event()
+    failed = 0
+    query_errors: list[tuple[int, dict[str, Any], Exception]] = []
 
     async def worker(worker_index: int) -> None:
-        nonlocal completed
+        nonlocal completed, failed
 
         while True:
             item = await queue.get()
             try:
                 if item is None:
                     return
-                if stop_event.is_set():
-                    continue
 
                 index, query_record = item
                 print(
                     f"[worker {worker_index}] Running query {index}/{total}: "
                     f"{query_record['user_input']}"
                 )
-                result = await rag.aquery_llm(
-                    query_record["user_input"],
-                    param=query_param_factory(),
-                )
-                results[index - 1] = build_output_record(query_record, result)
-
-                async with progress_lock:
-                    completed += 1
-                    print(
-                        f"[worker {worker_index}] Completed query {index}/{total} "
-                        f"({completed}/{total})"
+                try:
+                    result = await rag.aquery_llm(
+                        query_record["user_input"],
+                        param=query_param_factory(),
                     )
-            except Exception as exc:
-                async with error_lock:
-                    query_errors.append(exc)
-                    stop_event.set()
+                    results[index - 1] = build_output_record(query_record, result)
+                    async with progress_lock:
+                        completed += 1
+                        print(
+                            f"[worker {worker_index}] Completed query {index}/{total} "
+                            f"(ok={completed} failed={failed})"
+                        )
+                except Exception as exc:
+                    # Isolate per-query failures so the remaining queries still
+                    # run. Typical causes: transient LLM timeout, a single
+                    # malformed input. We capture the full exception for the
+                    # final summary written alongside the results file.
+                    async with error_lock:
+                        query_errors.append((index, query_record, exc))
+                    async with progress_lock:
+                        failed += 1
+                        print(
+                            f"[worker {worker_index}] FAILED query {index}/{total}: "
+                            f"{exc!r} (ok={completed} failed={failed})"
+                        )
             finally:
                 queue.task_done()
 
@@ -462,10 +482,27 @@ async def run_query_records(
     await queue.join()
     await asyncio.gather(*workers, return_exceptions=True)
 
-    if query_errors:
-        raise query_errors[0]
+    return results, query_errors
 
-    return [result for result in results if result is not None]
+
+def _warn_on_retrieval_mode_mismatch(config: QueryRunConfig) -> None:
+    """Flag query-time Milvus settings that do not match common build outputs.
+
+    These are not hard errors (LightRAG / Milvus will surface the real error
+    at query time) but catching them early helps the user diagnose an empty
+    retrieval_list faster than reading Milvus's own error path.
+    """
+    m = config.milvus
+    if m.enable_hybrid_search and not m.enable_sparse:
+        print(
+            "!!! WARNING: milvus.enable_hybrid_search=true requires "
+            "milvus.enable_sparse=true. Milvus will reject the hybrid query."
+        )
+    if m.enable_hybrid_search:
+        print(
+            "[info] hybrid search enabled; make sure this working_dir was "
+            "built with milvus.enable_sparse=true, otherwise queries return empty."
+        )
 
 
 async def run_query_job(name: str, config: QueryRunConfig) -> None:
@@ -475,10 +512,20 @@ async def run_query_job(name: str, config: QueryRunConfig) -> None:
     print(f"working_dir={config.working_dir}")
     print(f"query_input_path={config.query_input_path}")
     print(f"output_path={config.output_path}")
+    print(f"mode={config.mode}")
+    print(
+        f"milvus.enable_hybrid_search={config.milvus.enable_hybrid_search} "
+        f"milvus.enable_sparse={config.milvus.enable_sparse}"
+    )
+    print(f"rerank.enabled={config.rerank.enabled}")
+    _warn_on_retrieval_mode_mismatch(config)
 
     rag, milvus_db_path = build_query_rag(config)
-    await rag.initialize_storages()
     try:
+        # initialize_storages inside the try block so that a partial init
+        # failure still runs finalize_storages on whatever was opened.
+        await rag.initialize_storages()
+
         query_records = load_query_records(config)
         query_param_kwargs = build_query_param_kwargs(config)
 
@@ -501,29 +548,75 @@ async def run_query_job(name: str, config: QueryRunConfig) -> None:
             )
         )
 
-        results = await run_query_records(
+        results, query_errors = await run_query_records(
             rag,
             query_records,
             max_parallel_queries=config.max_parallel_queries,
             query_param_factory=lambda: QueryParam(**query_param_kwargs),
         )
 
+        success_count = sum(1 for r in results if r is not None)
+        total = len(query_records)
+        print("\n=== Query Summary ===")
+        print(f"Success: {success_count}/{total}  Failed: {len(query_errors)}/{total}")
+        for err_index, err_record, err_exc in query_errors[:10]:
+            print(f"  [#{err_index}] {err_record['user_input'][:60]!r}: {err_exc!r}")
+        if len(query_errors) > 10:
+            print(f"  ... and {len(query_errors) - 10} more")
+
+        # Build payload: always a list for batches; keep single-record dict
+        # for the one-query case so existing downstream consumers still work.
+        successful_records = [r for r in results if r is not None]
+        if total == 1 and not query_errors:
+            output_payload: dict[str, Any] | list[dict[str, Any]] = (
+                successful_records[0] if successful_records else {}
+            )
+        else:
+            output_payload = successful_records
+
         output_path = Path(config.output_path)
-        output_payload: dict[str, Any] | list[dict[str, Any]]
-        output_payload = results[0] if len(results) == 1 else results
         output_path.write_text(
             json.dumps(output_payload, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
+        print(f"Saved results to: {output_path}")
 
-        print("\n=== LightRAG Query Result ===")
-        print(f"Saved to: {output_path}")
+        if query_errors:
+            errors_path = output_path.with_suffix(output_path.suffix + ".errors.json")
+            errors_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "index": idx,
+                            "user_input": rec.get("user_input"),
+                            "reference": rec.get("reference"),
+                            "meta": rec.get("meta", {}),
+                            "error": repr(exc),
+                        }
+                        for idx, rec, exc in query_errors
+                    ],
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+            print(f"Saved error summary to: {errors_path}")
     finally:
         await rag.finalize_storages()
 
 
 async def run() -> None:
     jobs_file = _resolve_jobs_file()
+    log_overrides = _peek_logging_config(jobs_file)
+    # Default the log name prefix to 'query' so query runs don't overwrite
+    # build logs sharing the same directory.
+    setup_runner_logging(
+        log_dir=log_overrides.get("log_dir"),
+        name=log_overrides.get("name", "query"),
+        level=log_overrides.get("level"),
+    )
+
     if jobs_file is None:
         await run_query_job("default", CONFIG)
         return

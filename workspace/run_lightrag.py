@@ -1,12 +1,15 @@
-﻿import asyncio
+import asyncio
+import atexit
 import base64
 import json
+import logging
 import sys
 import os
+import time
 from dataclasses import dataclass, field, replace
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TextIO
 import numpy as np
 from dotenv import load_dotenv
 from openai import APIConnectionError, APITimeoutError, RateLimitError
@@ -1109,6 +1112,170 @@ async def run_single_job(name: str, config: RunConfig) -> None:
         await rag.finalize_storages()
 
 
+class _TeeStream:
+    """Write to a console stream and a log file at the same time.
+
+    Swallows file-side errors so a broken log file never takes the process
+    down. Tries hard to look like a normal TTY stream so third-party libs
+    (tqdm, rich, traceback printer) don't misbehave.
+    """
+
+    def __init__(self, console: TextIO, file: TextIO) -> None:
+        self._console = console
+        self._file = file
+
+    def write(self, data: str) -> int:
+        written = self._console.write(data)
+        try:
+            self._file.write(data)
+        except Exception:
+            pass
+        return written if isinstance(written, int) else len(data)
+
+    def flush(self) -> None:
+        try:
+            self._console.flush()
+        except Exception:
+            pass
+        try:
+            self._file.flush()
+        except Exception:
+            pass
+
+    def isatty(self) -> bool:
+        try:
+            return bool(self._console.isatty())
+        except Exception:
+            return False
+
+    def fileno(self) -> int:
+        # Some libs (like subprocess) try to grab a numeric fd. Fall back to
+        # the console fd so they can still work; writes are still tee'd as
+        # long as callers go through sys.stdout.write rather than the fd.
+        return self._console.fileno()
+
+    def writable(self) -> bool:
+        return True
+
+
+_LOGGING_CONFIGURED = False
+
+
+def setup_runner_logging(
+    log_dir: Path | None = None,
+    name: str = "build",
+    level: str | None = None,
+) -> Path:
+    """Configure console + file logging for the runner and LightRAG itself.
+
+    - Creates a new log file `logs/<name>_<timestamp>.log` so each run is
+      self-contained (no overwrite, no mixing with previous runs).
+    - Hooks a FileHandler onto the `lightrag` logger so its INFO logs land in
+      the same file.
+    - Tees `sys.stdout` / `sys.stderr` into the same file so all the `print`
+      calls in this runner are captured without having to rewrite them.
+    - Disables LightRAG's default 10MB rotation (a single build pass can
+      easily exceed that and we want one monolithic log per run).
+
+    Resolution order for each option:
+      1. explicit argument (from jobs file's `logging` block)
+      2. environment variable
+      3. hard default
+    """
+    global _LOGGING_CONFIGURED
+    if _LOGGING_CONFIGURED:
+        # Avoid double-wrapping stdout when run() is re-entered (e.g. tests).
+        return Path(os.environ.get("RUNNER_LOG_FILE", ""))
+
+    resolved_dir = log_dir or Path(
+        os.getenv("RUNNER_LOG_DIR", str(Path(__file__).resolve().parent / "logs"))
+    )
+    resolved_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_file = resolved_dir / f"{name}_{timestamp}.log"
+
+    # Disable LightRAG's rotating file handler behavior (setup_logger reads
+    # this env var). 0 turns off rotation in RotatingFileHandler.
+    os.environ.setdefault("LOG_MAX_BYTES", "0")
+
+    resolved_level = level or os.getenv("LIGHTRAG_LOG_LEVEL", "INFO")
+
+    # Configure LightRAG's own logger to land in the same file.
+    try:
+        from lightrag.utils import setup_logger as _lr_setup_logger
+
+        _lr_setup_logger(
+            "lightrag",
+            level=resolved_level,
+            log_file_path=str(log_file),
+            enable_file_logging=True,
+        )
+    except Exception as exc:  # don't let logging setup kill the run
+        print(f"[runner] warning: failed to configure lightrag logger: {exc}")
+
+    # Tee stdout / stderr into the same file (independent fd; line-buffered).
+    log_fp = open(log_file, "a", encoding="utf-8", buffering=1)
+    sys.stdout = _TeeStream(sys.__stdout__, log_fp)
+    sys.stderr = _TeeStream(sys.__stderr__, log_fp)
+
+    def _close_log() -> None:
+        try:
+            log_fp.flush()
+            log_fp.close()
+        except Exception:
+            pass
+
+    atexit.register(_close_log)
+
+    # Make the resolved path discoverable by other code and by re-entry guard.
+    os.environ["RUNNER_LOG_FILE"] = str(log_file)
+    _LOGGING_CONFIGURED = True
+
+    # Use a short banner so the log file itself is self-identifying.
+    logging.getLogger("lightrag").info(
+        "runner logging started: %s (pid=%s)", log_file, os.getpid()
+    )
+    print(f"[runner] logging to: {log_file}")
+    return log_file
+
+
+def _peek_logging_config(jobs_path: Path | None) -> dict[str, Any]:
+    """Read the top-level `logging` block from a jobs file without invoking
+    the full jobs loader. This runs before logging is configured, so we stay
+    tolerant of malformed input and silently fall back to defaults.
+
+    Schema:
+      { "logging": { "log_dir": "...", "name": "...", "level": "INFO" }, ... }
+
+    Relative `log_dir` paths are resolved relative to the jobs file's parent
+    directory so `logs` in jobs.build.example.json means `workspace/logs`.
+    """
+    if jobs_path is None or not jobs_path.exists():
+        return {}
+    try:
+        raw = json.loads(jobs_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    block = raw.get("logging") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return {}
+
+    result: dict[str, Any] = {}
+    log_dir_raw = block.get("log_dir")
+    if isinstance(log_dir_raw, str) and log_dir_raw.strip():
+        log_dir_path = Path(log_dir_raw).expanduser()
+        if not log_dir_path.is_absolute():
+            log_dir_path = (jobs_path.parent / log_dir_path).resolve()
+        result["log_dir"] = log_dir_path
+    name_raw = block.get("name")
+    if isinstance(name_raw, str) and name_raw.strip():
+        result["name"] = name_raw.strip()
+    level_raw = block.get("level")
+    if isinstance(level_raw, str) and level_raw.strip():
+        result["level"] = level_raw.strip().upper()
+    return result
+
+
 def _resolve_jobs_file() -> Path | None:
     """Pick up a jobs file path from CLI args or the JOBS_FILE env var.
 
@@ -1126,6 +1293,13 @@ def _resolve_jobs_file() -> Path | None:
 
 async def run() -> None:
     jobs_file = _resolve_jobs_file()
+    log_overrides = _peek_logging_config(jobs_file)
+    setup_runner_logging(
+        log_dir=log_overrides.get("log_dir"),
+        name=log_overrides.get("name", "build"),
+        level=log_overrides.get("level"),
+    )
+
     if jobs_file is None:
         await run_single_job("default", CONFIG)
         return

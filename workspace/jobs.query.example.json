@@ -3,15 +3,27 @@
   "_usage": "python workspace/run_lightrag_query.py workspace/jobs.query.example.json",
   "_knob_notes": {
     "query_input_path": "JSON/JSONL query records. If set, the fallback question field is ignored.",
-    "output_path": "Where query answers and retrieval_list are written.",
-    "mode": "Query mode, usually mix for graph + vector retrieval.",
+    "output_path": "Where query answers and retrieval_list are written. On partial failures a sibling '.errors.json' file is also written.",
+    "mode": "Query mode, usually mix for graph + vector retrieval. Also supports local / global / hybrid / naive.",
     "query.top_k": "Number of entities/relations to retrieve from graph branches.",
     "query.chunk_top_k": "Final maximum number of chunks kept after merge/rerank/token filtering.",
-    "max_parallel_queries": "Query worker concurrency used by run_lightrag_query.py."
+    "max_parallel_queries": "Query worker concurrency. Each worker issues ~2 LLM calls per query; they share the global llm_model_max_async semaphore, so true LLM QPS is capped by that value.",
+    "llm_model_max_async": "Global LLM concurrency across all query workers (shared semaphore).",
+    "milvus.enable_hybrid_search": "Dense+sparse fused retrieval. REQUIRES the working_dir to have been built with milvus.enable_sparse=true, otherwise Milvus rejects the query.",
+    "milvus.enable_sparse": "Must be true to query sparse vectors; does not affect whether the working_dir actually contains them. If the build job set enable_sparse=false, flipping this to true here will NOT magically create sparse vectors.",
+    "rerank.enabled": "If false, no reranker is attached AND QueryParam.enable_rerank is forced off (no warning spam from LightRAG).",
+    "logging.log_dir": "Relative paths resolve against this file's parent directory.",
+    "logging.name": "Log filename prefix; actual file is '<name>_<YYYYMMDD_HHMMSS>.log'.",
+    "logging.level": "LightRAG log level (DEBUG / INFO / WARNING / ERROR)."
+  },
+  "logging": {
+    "log_dir": "logs",
+    "name": "query",
+    "level": "INFO"
   },
   "defaults": {
     "mode": "mix",
-    "max_parallel_queries": 1,
+    "max_parallel_queries": 5,
     "llm_model_max_async": 10,
     "vector_storage": "MilvusVectorDBStorage",
     "milvus": {
@@ -53,36 +65,49 @@
   },
   "jobs": [
     {
-      "name": "2wikimqa_lightrag_hybrid_rerank",
+      "_note": "Hybrid retrieval + rerank. working_dir must have been built with enable_sparse=true.",
+      "name": "2wikimqa_hybrid_rerank",
       "enabled": true,
       "query_input_path": "/data/h50056789/Rag_Chunking/Query/2wikimqa_queries.jsonl",
       "working_dir": "/data/h50056789/LightRAG/workspace/rag_storage_milvus/2wikimqa_lightrag_hybrid_rerank",
-      "output_path": "/data/h50056789/LightRAG/workspace/output/2wikimqa_lightrag_hybrid_rerank.json",
+      "output_path": "/data/h50056789/LightRAG/workspace/output/2wikimqa_hybrid_rerank.json",
       "milvus": {
         "enable_sparse": true,
         "enable_hybrid_search": true,
         "candidate_limit_multiplier": 6
       },
-      "rerank": {
-        "enabled": true
-      },
-      "query": {
-        "chunk_top_k": 30
-      }
+      "rerank": { "enabled": true },
+      "query": { "chunk_top_k": 30 }
     },
     {
-      "name": "2wikimqa_lightrag_dense_no_rerank",
+      "_note": "Hybrid retrieval, no rerank. Measures raw hybrid quality without reranker boost.",
+      "name": "2wikimqa_hybrid_no_rerank",
+      "enabled": true,
+      "query_input_path": "/data/h50056789/Rag_Chunking/Query/2wikimqa_queries.jsonl",
+      "working_dir": "/data/h50056789/LightRAG/workspace/rag_storage_milvus/2wikimqa_lightrag_hybrid_rerank",
+      "output_path": "/data/h50056789/LightRAG/workspace/output/2wikimqa_hybrid_no_rerank.json",
+      "milvus": { "enable_sparse": true, "enable_hybrid_search": true },
+      "rerank": { "enabled": false }
+    },
+    {
+      "_note": "Pure dense retrieval + rerank. working_dir does NOT need a sparse column.",
+      "name": "2wikimqa_dense_rerank",
       "enabled": true,
       "query_input_path": "/data/h50056789/Rag_Chunking/Query/2wikimqa_queries.jsonl",
       "working_dir": "/data/h50056789/LightRAG/workspace/rag_storage_milvus/2wikimqa_lightrag_dense_no_rerank",
-      "output_path": "/data/h50056789/LightRAG/workspace/output/2wikimqa_lightrag_dense_no_rerank.json",
-      "milvus": {
-        "enable_sparse": false,
-        "enable_hybrid_search": false
-      },
-      "rerank": {
-        "enabled": false
-      }
+      "output_path": "/data/h50056789/LightRAG/workspace/output/2wikimqa_dense_rerank.json",
+      "milvus": { "enable_sparse": false, "enable_hybrid_search": false },
+      "rerank": { "enabled": true }
+    },
+    {
+      "_note": "Pure dense retrieval, no rerank. Baseline for ablation.",
+      "name": "2wikimqa_dense_no_rerank",
+      "enabled": true,
+      "query_input_path": "/data/h50056789/Rag_Chunking/Query/2wikimqa_queries.jsonl",
+      "working_dir": "/data/h50056789/LightRAG/workspace/rag_storage_milvus/2wikimqa_lightrag_dense_no_rerank",
+      "output_path": "/data/h50056789/LightRAG/workspace/output/2wikimqa_dense_no_rerank.json",
+      "milvus": { "enable_sparse": false, "enable_hybrid_search": false },
+      "rerank": { "enabled": false }
     }
   ]
 }
