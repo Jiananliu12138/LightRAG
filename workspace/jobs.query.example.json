@@ -1,0 +1,88 @@
+{
+  "_comment": "Query-only jobs for workspace/run_lightrag_query.py. The working_dir values must point at graph/vector stores already built by run_lightrag.py.",
+  "_usage": "python workspace/run_lightrag_query.py workspace/jobs.query.example.json",
+  "_knob_notes": {
+    "query_input_path": "JSON/JSONL query records. If set, the fallback question field is ignored.",
+    "output_path": "Where query answers and retrieval_list are written.",
+    "mode": "Query mode, usually mix for graph + vector retrieval.",
+    "query.top_k": "Number of entities/relations to retrieve from graph branches.",
+    "query.chunk_top_k": "Final maximum number of chunks kept after merge/rerank/token filtering.",
+    "max_parallel_queries": "Query worker concurrency used by run_lightrag_query.py."
+  },
+  "defaults": {
+    "mode": "mix",
+    "max_parallel_queries": 1,
+    "llm_model_max_async": 10,
+    "vector_storage": "MilvusVectorDBStorage",
+    "milvus": {
+      "enable_sparse": true,
+      "enable_hybrid_search": true,
+      "candidate_limit_multiplier": 4
+    },
+    "query": {
+      "top_k": 60,
+      "chunk_top_k": 20,
+      "max_entity_tokens": 6000,
+      "max_relation_tokens": 8000,
+      "max_total_tokens": 30000
+    },
+    "rerank": {
+      "enabled": true,
+      "binding": "cohere",
+      "model": "BAAI/bge-reranker-v2-m3",
+      "base_url": "http://127.0.0.1:8002/rerank",
+      "api_key": "EMPTY",
+      "min_score": 0.0,
+      "enable_chunking": false,
+      "max_tokens_per_doc": 8192
+    },
+    "llm": {
+      "model": "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+      "base_url": "http://127.0.0.1:8001/v1",
+      "api_key": "EMPTY",
+      "temperature": 0.0,
+      "max_tokens": 8192
+    },
+    "embedding": {
+      "model": "BAAI/bge-m3",
+      "base_url": "http://127.0.0.1:8003/v1",
+      "api_key": "EMPTY",
+      "embedding_dim": 1024,
+      "max_token_size": 8192
+    }
+  },
+  "jobs": [
+    {
+      "name": "2wikimqa_lightrag_hybrid_rerank",
+      "enabled": true,
+      "query_input_path": "/data/h50056789/Rag_Chunking/Query/2wikimqa_queries.jsonl",
+      "working_dir": "/data/h50056789/LightRAG/workspace/rag_storage_milvus/2wikimqa_lightrag_hybrid_rerank",
+      "output_path": "/data/h50056789/LightRAG/workspace/output/2wikimqa_lightrag_hybrid_rerank.json",
+      "milvus": {
+        "enable_sparse": true,
+        "enable_hybrid_search": true,
+        "candidate_limit_multiplier": 6
+      },
+      "rerank": {
+        "enabled": true
+      },
+      "query": {
+        "chunk_top_k": 30
+      }
+    },
+    {
+      "name": "2wikimqa_lightrag_dense_no_rerank",
+      "enabled": true,
+      "query_input_path": "/data/h50056789/Rag_Chunking/Query/2wikimqa_queries.jsonl",
+      "working_dir": "/data/h50056789/LightRAG/workspace/rag_storage_milvus/2wikimqa_lightrag_dense_no_rerank",
+      "output_path": "/data/h50056789/LightRAG/workspace/output/2wikimqa_lightrag_dense_no_rerank.json",
+      "milvus": {
+        "enable_sparse": false,
+        "enable_hybrid_search": false
+      },
+      "rerank": {
+        "enabled": false
+      }
+    }
+  ]
+}

@@ -1,51 +1,47 @@
 import asyncio
 import json
-import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable
-from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from lightrag import LightRAG, QueryParam
+from lightrag.utils import EmbeddingFunc
+
+from run_lightrag import (
+    OpenAICompatibleEmbeddingConfig,
+    OpenAICompatibleLLMConfig,
+    _resolve_jobs_file,
+    bge_openai_compatible_embed,
+    build_local_llm_complete,
+    load_json_items,
+)
 from milvus_lite_config import (
     MilvusLiteConfig,
     build_milvus_vector_storage_kwargs,
     configure_local_milvus_lite,
 )
 
-os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKING_DIR = Path(__file__).resolve().parent / "rag_storage_milvus" / "LightRAG"
-OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "test.json"
-
-load_dotenv(PROJECT_ROOT / ".env", override=False)
-
-WORKING_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+OUTPUT_PATH = Path(__file__).resolve().parent / "output" / "default_query.json"
 
 
 @dataclass(frozen=True)
-class OpenAICompatibleLLMConfig:
-    model: str
-    base_url: str
-    api_key: str = "EMPTY"
-    timeout: int = 3600
-    temperature: float | None = 0.2
-    max_tokens: int | None = 4096
-    extra_body: dict[str, Any] = field(default_factory=dict)
+class QueryDefaults:
+    """Per-job defaults forwarded to QueryParam. Leave a field as None to let
+    LightRAG / QueryParam use its own default (usually env-var driven)."""
 
-
-@dataclass(frozen=True)
-class OpenAICompatibleEmbeddingConfig:
-    model: str
-    base_url: str
-    api_key: str = "EMPTY"
-    embedding_dim: int = 1024
-    max_token_size: int = 8192
-    timeout: int = 3600
+    top_k: int | None = None
+    chunk_top_k: int | None = None
+    max_entity_tokens: int | None = None
+    max_relation_tokens: int | None = None
+    max_total_tokens: int | None = None
+    user_prompt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -62,13 +58,12 @@ class RerankConfig:
 
 
 @dataclass(frozen=True)
-class RunConfig:
+class QueryRunConfig:
     query_input_path: str | None = None
-    question: str = ""
+    question: str = "Which country the director of film Renegade Force is from?"
     mode: str = "mix"
-    max_parallel_queries: int = field(
-        default_factory=lambda: int(os.getenv("MAX_PARALLEL_QUERIES", "10"))
-    )
+    max_parallel_queries: int = 1
+    llm_model_max_async: int = 10
     vector_storage: str = "MilvusVectorDBStorage"
     working_dir: str = str(WORKING_DIR)
     output_path: str = str(OUTPUT_PATH)
@@ -93,52 +88,10 @@ class RunConfig:
     )
     rerank: RerankConfig = field(default_factory=RerankConfig)
     milvus: MilvusLiteConfig = field(default_factory=MilvusLiteConfig)
+    query: QueryDefaults = field(default_factory=QueryDefaults)
 
 
-CONFIG = RunConfig()
-
-
-def load_json_items(input_path: Path) -> list[Any]:
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
-    suffix = input_path.suffix.lower()
-    if suffix == ".jsonl":
-        text = input_path.read_text(encoding="utf-8")
-        items: list[Any] = []
-        decoder = json.JSONDecoder(strict=False)
-        position = 0
-        text_length = len(text)
-
-        while position < text_length:
-            while position < text_length and text[position].isspace():
-                position += 1
-            if position >= text_length:
-                break
-
-            try:
-                item, next_position = decoder.raw_decode(text, position)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    "Failed to parse JSONL input. This loader supports either "
-                    "standard one-JSON-object-per-line JSONL or multiple JSON "
-                    "objects separated by whitespace. If text fields contain "
-                    "literal newlines, they must be escaped as \\n inside JSON "
-                    "strings, or the file should be converted to a regular .json file."
-                ) from exc
-
-            items.append(item)
-            position = next_position
-
-        return items
-
-    if suffix == ".json":
-        payload = json.loads(input_path.read_text(encoding="utf-8"), strict=False)
-        if isinstance(payload, list):
-            return payload
-        return [payload]
-
-    raise ValueError(f"Unsupported input file type: {input_path.suffix}")
+CONFIG = QueryRunConfig()
 
 
 def is_query_record(payload: Any) -> bool:
@@ -148,7 +101,11 @@ def is_query_record(payload: Any) -> bool:
 
 
 def normalize_query_record(record: dict[str, Any]) -> dict[str, Any]:
-    question = record.get("user_input") or record.get("question") or record.get("query")
+    question = (
+        record.get("user_input")
+        or record.get("question")
+        or record.get("query")
+    )
     if not isinstance(question, str) or not question.strip():
         raise ValueError("Query record must contain a non-empty user_input/question/query")
 
@@ -167,7 +124,7 @@ def normalize_query_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def load_query_records(config: RunConfig) -> list[dict[str, Any]]:
+def load_query_records(config: QueryRunConfig) -> list[dict[str, Any]]:
     query_input = config.query_input_path
 
     if not query_input:
@@ -229,167 +186,7 @@ def build_output_record(
     }
 
 
-async def run_query_records(
-    rag: Any,
-    query_records: list[dict[str, Any]],
-    config: RunConfig,
-    query_param_factory: Callable[[], Any],
-) -> list[dict[str, Any]]:
-    total = len(query_records)
-    max_parallel_queries = max(1, config.max_parallel_queries)
-    worker_count = min(max_parallel_queries, total)
-
-    print("\n=== Query Execution ===")
-    print(f"Pending queries: {total}")
-    print(f"Parallel query workers: {worker_count}")
-
-    queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue()
-    for index, query_record in enumerate(query_records, start=1):
-        queue.put_nowait((index, query_record))
-    for _ in range(worker_count):
-        queue.put_nowait(None)
-
-    results: list[dict[str, Any] | None] = [None] * total
-    progress_lock = asyncio.Lock()
-    error_lock = asyncio.Lock()
-    completed = 0
-    query_errors: list[Exception] = []
-    stop_event = asyncio.Event()
-
-    async def worker(worker_index: int) -> None:
-        nonlocal completed
-
-        while True:
-            item = await queue.get()
-            try:
-                if item is None:
-                    return
-
-                if stop_event.is_set():
-                    continue
-
-                index, query_record = item
-                print(
-                    f"[worker {worker_index}] Running query {index}/{total}: "
-                    f"{query_record['user_input']}"
-                )
-                result = await rag.aquery_llm(
-                    query_record["user_input"],
-                    param=query_param_factory(),
-                )
-                results[index - 1] = build_output_record(query_record, result)
-
-                async with progress_lock:
-                    completed += 1
-                    print(
-                        f"[worker {worker_index}] Completed query {index}/{total} "
-                        f"({completed}/{total})"
-                    )
-            except Exception as exc:
-                async with error_lock:
-                    query_errors.append(exc)
-                    stop_event.set()
-            finally:
-                queue.task_done()
-
-    workers = [
-        asyncio.create_task(worker(worker_index))
-        for worker_index in range(1, worker_count + 1)
-    ]
-
-    await queue.join()
-    await asyncio.gather(*workers, return_exceptions=True)
-
-    if query_errors:
-        raise query_errors[0]
-
-    return [result for result in results if result is not None]
-
-
-_tokenizer = None
-
-
-def _get_tokenizer():
-    global _tokenizer
-    if _tokenizer is None:
-        from transformers import AutoTokenizer
-
-        _tokenizer = AutoTokenizer.from_pretrained(
-            "/data/h50056789/Rag_Chunking/model/Qwen/Qwen2.5-7B-Instruct",
-            trust_remote_code=True,
-        )
-    return _tokenizer
-
-
-def _count_prompt_tokens(
-    prompt: str,
-    system_prompt: str | None,
-    history_messages: list[dict[str, Any]] | None,
-) -> dict[str, int]:
-    tokenizer = _get_tokenizer()
-    parts: dict[str, int] = {}
-    if system_prompt:
-        parts["system_prompt"] = len(tokenizer.encode(system_prompt))
-    for i, msg in enumerate(history_messages or []):
-        content = msg.get("content", "")
-        if isinstance(content, str) and content:
-            role = msg.get("role", "user")
-            parts[f"history[{i}]({role})"] = len(tokenizer.encode(content))
-    parts["query"] = len(tokenizer.encode(prompt))
-
-    messages: list[dict[str, str]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    for msg in history_messages or []:
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            messages.append({"role": msg.get("role", "user"), "content": content})
-    messages.append({"role": "user", "content": prompt})
-    parts["total"] = len(tokenizer.apply_chat_template(messages, add_generation_prompt=True))
-    return parts
-
-
-async def local_llm_complete(
-    prompt: str,
-    system_prompt: str | None = None,
-    history_messages: list[dict[str, Any]] | None = None,
-    **kwargs: Any,
-) -> str:
-    from lightrag.llm.openai import openai_complete_if_cache
-
-    if kwargs.get("keyword_extraction"):
-        stage = "Keyword Extraction"
-    elif kwargs.get("enable_cot"):
-        stage = "Answer Generation"
-    else:
-        stage = "LLM Call"
-    token_parts = _count_prompt_tokens(prompt, system_prompt, history_messages)
-    detail = "  ".join(f"{k}={v}" for k, v in token_parts.items())
-    print(f"[{stage}] {detail}")
-
-    llm_config = CONFIG.llm
-    request_kwargs: dict[str, Any] = {}
-    if llm_config.temperature is not None:
-        request_kwargs["temperature"] = llm_config.temperature
-    if llm_config.max_tokens is not None:
-        request_kwargs["max_tokens"] = llm_config.max_tokens
-    if llm_config.extra_body:
-        request_kwargs["extra_body"] = llm_config.extra_body
-    request_kwargs.update(kwargs)
-
-    return await openai_complete_if_cache(
-        model=llm_config.model,
-        prompt=prompt,
-        system_prompt=system_prompt,
-        history_messages=history_messages or [],
-        base_url=llm_config.base_url,
-        api_key=llm_config.api_key,
-        timeout=llm_config.timeout,
-        **request_kwargs,
-    )
-
-
-def build_rerank_model_func(config: RunConfig):
+def build_rerank_model_func(config: QueryRunConfig):
     if not config.rerank.enabled:
         return None
 
@@ -436,16 +233,130 @@ def build_rerank_model_func(config: RunConfig):
     return local_rerank
 
 
-async def run() -> None:
-    from lightrag import LightRAG, QueryParam
-    from lightrag.llm.openai import openai_embed
-    from lightrag.utils import EmbeddingFunc
+def _strip_comments(overrides: dict[str, Any] | None) -> dict[str, Any]:
+    if not overrides:
+        return {}
+    return {k: v for k, v in overrides.items() if not k.startswith("_")}
 
-    config = CONFIG
+
+def _merge_dataclass(base: Any, overrides: dict[str, Any] | None) -> Any:
+    effective = _strip_comments(overrides)
+    if not effective:
+        return base
+    allowed = {f.name for f in base.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+    unknown = set(effective) - allowed
+    if unknown:
+        raise ValueError(
+            f"Unknown override keys for {type(base).__name__}: {sorted(unknown)}"
+        )
+    return replace(base, **effective)
+
+
+def apply_job_overrides(base: QueryRunConfig, job: dict[str, Any]) -> QueryRunConfig:
+    top_level_keys = {
+        "query_input_path",
+        "question",
+        "mode",
+        "max_parallel_queries",
+        "llm_model_max_async",
+        "vector_storage",
+        "working_dir",
+        "output_path",
+    }
+    ignored_build_keys = {"chunk_input_path", "max_parallel_insert"}
+    effective_job = {k: v for k, v in job.items() if not k.startswith("_")}
+    unknown = set(effective_job) - (
+        top_level_keys
+        | ignored_build_keys
+        | {"llm", "embedding", "rerank", "milvus", "query", "name", "enabled"}
+    )
+    if unknown:
+        raise ValueError(f"Unknown job keys: {sorted(unknown)}")
+
+    top_overrides = {k: effective_job[k] for k in top_level_keys if k in effective_job}
+    llm = _merge_dataclass(base.llm, effective_job.get("llm"))
+    embedding = _merge_dataclass(base.embedding, effective_job.get("embedding"))
+    rerank = _merge_dataclass(base.rerank, effective_job.get("rerank"))
+    query = _merge_dataclass(base.query, effective_job.get("query"))
+
+    milvus_override = effective_job.get("milvus")
+    effective_milvus_override = _strip_comments(milvus_override)
+    if "working_dir" in effective_job and "uri" not in effective_milvus_override:
+        milvus = replace(
+            _merge_dataclass(base.milvus, milvus_override),
+            uri=None,
+        )
+    else:
+        milvus = _merge_dataclass(base.milvus, milvus_override)
+
+    return replace(
+        base,
+        **top_overrides,
+        llm=llm,
+        embedding=embedding,
+        rerank=rerank,
+        milvus=milvus,
+        query=query,
+    )
+
+
+def load_jobs_file(
+    jobs_path: Path, base: QueryRunConfig
+) -> list[tuple[str, QueryRunConfig]]:
+    if not jobs_path.exists():
+        raise FileNotFoundError(f"Jobs file not found: {jobs_path}")
+
+    raw = json.loads(jobs_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("Jobs file must be a JSON object with 'jobs' array")
+
+    defaults = raw.get("defaults") or {}
+    base_with_defaults = apply_job_overrides(base, defaults) if defaults else base
+
+    jobs_raw = raw.get("jobs")
+    if not isinstance(jobs_raw, list) or not jobs_raw:
+        raise ValueError("Jobs file must contain a non-empty 'jobs' array")
+
+    resolved: list[tuple[str, QueryRunConfig]] = []
+    for index, job in enumerate(jobs_raw, start=1):
+        if not isinstance(job, dict):
+            raise ValueError(f"Job #{index} must be a JSON object")
+        if job.get("enabled", True) is False:
+            continue
+        name = str(job.get("name") or f"job_{index}")
+        resolved.append((name, apply_job_overrides(base_with_defaults, job)))
+
+    if not resolved:
+        raise ValueError("All jobs are disabled; nothing to run")
+    return resolved
+
+
+def build_query_param_kwargs(config: QueryRunConfig) -> dict[str, Any]:
+    query_param_kwargs: dict[str, Any] = {
+        "mode": config.mode,
+        "enable_rerank": config.rerank.enabled,
+    }
+    # Only forward fields explicitly set by the job/config. If left as None,
+    # QueryParam keeps its own env-var-driven defaults.
+    for field_name in (
+        "top_k",
+        "chunk_top_k",
+        "max_entity_tokens",
+        "max_relation_tokens",
+        "max_total_tokens",
+        "user_prompt",
+    ):
+        value = getattr(config.query, field_name)
+        if value is not None:
+            query_param_kwargs[field_name] = value
+    return query_param_kwargs
+
+
+def build_query_rag(config: QueryRunConfig) -> tuple[LightRAG, str | None]:
     milvus_db_path = configure_local_milvus_lite(config.working_dir, config.milvus)
     embedding_config = config.embedding
     embedding_func_impl = partial(
-        openai_embed.func,
+        bge_openai_compatible_embed,
         model=embedding_config.model,
         base_url=embedding_config.base_url,
         api_key=embedding_config.api_key,
@@ -458,32 +369,122 @@ async def run() -> None:
         model_name=embedding_config.model,
         func=embedding_func_impl,
     )
-    rerank_model_func = build_rerank_model_func(config)
 
     rag = LightRAG(
         working_dir=config.working_dir,
         llm_model_name=config.llm.model,
-        llm_model_func=local_llm_complete,
+        llm_model_func=build_local_llm_complete(config.llm),
         embedding_func=embedding_func,
-        rerank_model_func=rerank_model_func,
+        rerank_model_func=build_rerank_model_func(config),
         min_rerank_score=config.rerank.min_score,
-        max_parallel_insert=10,
+        llm_model_max_async=max(1, config.llm_model_max_async),
+        max_parallel_insert=max(1, config.max_parallel_insert),
         default_llm_timeout=config.llm.timeout,
         vector_storage=config.vector_storage,
         vector_db_storage_cls_kwargs=build_milvus_vector_storage_kwargs(
             config.milvus
         ),
     )
+    return rag, milvus_db_path
 
+
+async def run_query_records(
+    rag: LightRAG,
+    query_records: list[dict[str, Any]],
+    *,
+    max_parallel_queries: int,
+    query_param_factory: Callable[[], QueryParam],
+) -> list[dict[str, Any]]:
+    total = len(query_records)
+    max_parallel_queries = max(1, max_parallel_queries)
+    worker_count = min(max_parallel_queries, total)
+
+    print("\n=== Query Execution ===")
+    print(f"Pending queries: {total}")
+    print(f"Parallel query workers: {worker_count}")
+
+    if total == 0:
+        return []
+
+    queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue()
+    for index, query_record in enumerate(query_records, start=1):
+        queue.put_nowait((index, query_record))
+    for _ in range(worker_count):
+        queue.put_nowait(None)
+
+    results: list[dict[str, Any] | None] = [None] * total
+    progress_lock = asyncio.Lock()
+    error_lock = asyncio.Lock()
+    completed = 0
+    query_errors: list[Exception] = []
+    stop_event = asyncio.Event()
+
+    async def worker(worker_index: int) -> None:
+        nonlocal completed
+
+        while True:
+            item = await queue.get()
+            try:
+                if item is None:
+                    return
+                if stop_event.is_set():
+                    continue
+
+                index, query_record = item
+                print(
+                    f"[worker {worker_index}] Running query {index}/{total}: "
+                    f"{query_record['user_input']}"
+                )
+                result = await rag.aquery_llm(
+                    query_record["user_input"],
+                    param=query_param_factory(),
+                )
+                results[index - 1] = build_output_record(query_record, result)
+
+                async with progress_lock:
+                    completed += 1
+                    print(
+                        f"[worker {worker_index}] Completed query {index}/{total} "
+                        f"({completed}/{total})"
+                    )
+            except Exception as exc:
+                async with error_lock:
+                    query_errors.append(exc)
+                    stop_event.set()
+            finally:
+                queue.task_done()
+
+    workers = [
+        asyncio.create_task(worker(worker_index))
+        for worker_index in range(1, worker_count + 1)
+    ]
+
+    await queue.join()
+    await asyncio.gather(*workers, return_exceptions=True)
+
+    if query_errors:
+        raise query_errors[0]
+
+    return [result for result in results if result is not None]
+
+
+async def run_query_job(name: str, config: QueryRunConfig) -> None:
+    Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n========== Query Job: {name} ==========")
+    print(f"working_dir={config.working_dir}")
+    print(f"query_input_path={config.query_input_path}")
+    print(f"output_path={config.output_path}")
+
+    rag, milvus_db_path = build_query_rag(config)
     await rag.initialize_storages()
     try:
         query_records = load_query_records(config)
-        max_parallel_queries = max(1, config.max_parallel_queries)
+        query_param_kwargs = build_query_param_kwargs(config)
 
         print("\n=== Query Execution Preview ===")
         print(f"Query count: {len(query_records)}")
         print(f"Mode: {config.mode}")
-        print(f"Max parallel queries: {max_parallel_queries}")
         print(f"Working dir: {config.working_dir}")
         print(f"Milvus Lite DB: {milvus_db_path}")
         if config.query_input_path:
@@ -493,20 +494,21 @@ async def run() -> None:
             )
         else:
             print("Question source: question")
+        print(
+            "QueryParam overrides: "
+            + ", ".join(
+                f"{k}={v}" for k, v in query_param_kwargs.items() if k != "mode"
+            )
+        )
 
         results = await run_query_records(
-            rag=rag,
-            query_records=query_records,
-            config=config,
-            query_param_factory=lambda: QueryParam(
-                mode=config.mode,
-                enable_rerank=config.rerank.enabled,
-            ),
+            rag,
+            query_records,
+            max_parallel_queries=config.max_parallel_queries,
+            query_param_factory=lambda: QueryParam(**query_param_kwargs),
         )
 
         output_path = Path(config.output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
         output_payload: dict[str, Any] | list[dict[str, Any]]
         output_payload = results[0] if len(results) == 1 else results
         output_path.write_text(
@@ -518,6 +520,26 @@ async def run() -> None:
         print(f"Saved to: {output_path}")
     finally:
         await rag.finalize_storages()
+
+
+async def run() -> None:
+    jobs_file = _resolve_jobs_file()
+    if jobs_file is None:
+        await run_query_job("default", CONFIG)
+        return
+
+    jobs = load_jobs_file(jobs_file, CONFIG)
+    print(f"Loaded {len(jobs)} query job(s) from {jobs_file}")
+    for index, (name, config) in enumerate(jobs, start=1):
+        print(f"\n>>> [{index}/{len(jobs)}] starting query job: {name}")
+        try:
+            await run_query_job(name, config)
+        except Exception as exc:
+            print(f"!!! query job '{name}' failed: {exc}")
+            import traceback
+
+            traceback.print_exc()
+    print("\n========== All query jobs finished ==========")
 
 
 if __name__ == "__main__":

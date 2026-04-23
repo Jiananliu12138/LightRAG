@@ -1,12 +1,12 @@
-import asyncio
+﻿import asyncio
 import base64
 import json
 import sys
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import numpy as np
 from dotenv import load_dotenv
 from openai import APIConnectionError, APITimeoutError, RateLimitError
@@ -17,15 +17,17 @@ from milvus_lite_config import (
     configure_local_milvus_lite,
 )
 
-os.environ["TIKTOKEN_CACHE_DIR"] = "/data/h50056789/Rag_Chunking/tiktoken_cache"
+# Respect an explicit TIKTOKEN_CACHE_DIR from the environment. Otherwise fall
+# back to the legacy Linux path only if it actually exists (so Windows and
+# fresh Linux machines do not silently point tiktoken at a missing directory).
+_LEGACY_TIKTOKEN_DIR = "/data/h50056789/Rag_Chunking/tiktoken_cache"
+if "TIKTOKEN_CACHE_DIR" not in os.environ and Path(_LEGACY_TIKTOKEN_DIR).is_dir():
+    os.environ["TIKTOKEN_CACHE_DIR"] = _LEGACY_TIKTOKEN_DIR
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKING_DIR = Path(__file__).resolve().parent / "rag_storage_milvus" / "LightRAG"
-OUTPUT_PATH = Path(__file__).resolve().parent / "3.19" / "test.json"
 
 load_dotenv(PROJECT_ROOT / ".env", override=False)
-
-WORKING_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -50,19 +52,6 @@ class OpenAICompatibleEmbeddingConfig:
     embedding_dim: int = 1024
     max_token_size: int = 8192
     timeout: int = 3600
-
-
-@dataclass(frozen=True)
-class RerankConfig:
-    enabled: bool = True
-    binding: str = "cohere"
-    model: str = "BAAI/bge-reranker-v2-m3"
-    base_url: str = "http://127.0.0.1:8002/rerank"
-    api_key: str = "EMPTY"
-    min_score: float = 0.0
-    enable_chunking: bool = False
-    max_tokens_per_doc: int = 8192
-    extra_body: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -124,9 +113,6 @@ class CustomChunkInsertProgress:
 @dataclass(frozen=True)
 class RunConfig:
     chunk_input_path: str | None = "/data/h50056789/Rag_Chunking/Chunk_Result/Lightrag_Chunk/2wikimqa_lightrag_chunk.json"
-    query_input_path: str | None = None
-    question: str = "Which country the director of film Renegade Force is from?"
-    mode: str = "mix"
     max_parallel_insert: int = field(
         default_factory=lambda: int(os.getenv("MAX_PARALLEL_INSERT", "10"))
     )
@@ -135,7 +121,6 @@ class RunConfig:
     )
     vector_storage: str = "MilvusVectorDBStorage"
     working_dir: str = str(WORKING_DIR)
-    output_path: str = str(OUTPUT_PATH)
     llm: OpenAICompatibleLLMConfig = field(
         default_factory=lambda: OpenAICompatibleLLMConfig(
             model="Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
@@ -155,7 +140,6 @@ class RunConfig:
             max_token_size=8192,
         )
     )
-    rerank: RerankConfig = field(default_factory=RerankConfig)
     milvus: MilvusLiteConfig = field(default_factory=MilvusLiteConfig)
 
 
@@ -256,98 +240,6 @@ def expand_custom_chunk_payloads_by_doc_id(
             expanded_payloads.append(payload)
 
     return expanded_payloads
-
-
-def is_query_record(payload: Any) -> bool:
-    return isinstance(payload, dict) and any(
-        key in payload for key in ("user_input", "question", "query")
-    )
-
-
-def normalize_query_record(record: dict[str, Any]) -> dict[str, Any]:
-    question = (
-        record.get("user_input")
-        or record.get("question")
-        or record.get("query")
-    )
-    if not isinstance(question, str) or not question.strip():
-        raise ValueError("Query record must contain a non-empty user_input/question/query")
-
-    reference = record.get("reference")
-    if reference is None:
-        reference = record.get("ground_truth")
-
-    meta = record.get("meta")
-    if meta is None:
-        meta = {}
-
-    return {
-        "user_input": question.strip(),
-        "reference": reference,
-        "meta": meta,
-    }
-
-
-def load_query_records(config: RunConfig) -> list[dict[str, Any]]:
-    query_input = config.query_input_path
-
-    if not query_input:
-        return [
-            {
-                "user_input": config.question,
-                "reference": None,
-                "meta": {},
-            }
-        ]
-
-    input_path = Path(query_input)
-    items = load_json_items(input_path)
-    if not items:
-        raise ValueError(f"No query records found in {input_path}")
-
-    records: list[dict[str, Any]] = []
-    for item in items:
-        if isinstance(item, dict) and isinstance(item.get("test_cases"), list):
-            for nested_item in item["test_cases"]:
-                if not isinstance(nested_item, dict):
-                    raise ValueError("Each test_cases item must be a JSON object")
-                records.append(normalize_query_record(nested_item))
-            continue
-
-        if not isinstance(item, dict) or not is_query_record(item):
-            raise ValueError(
-                "Query input must be a query record, a JSONL of query records, "
-                "or a JSON object containing a test_cases array"
-            )
-        records.append(normalize_query_record(item))
-
-    return records
-
-
-def extract_retrieval_list(query_result: dict[str, Any]) -> list[dict[str, Any]]:
-    data = query_result.get("data", {})
-    chunks = data.get("chunks", [])
-    if isinstance(chunks, list):
-        return [chunk for chunk in chunks if isinstance(chunk, dict)]
-    return []
-
-
-def build_output_record(
-    query_record: dict[str, Any],
-    query_result: dict[str, Any],
-) -> dict[str, Any]:
-    llm_response = query_result.get("llm_response", {})
-    llm_answer = None
-    if isinstance(llm_response, dict):
-        llm_answer = llm_response.get("content")
-
-    return {
-        "user_input": query_record["user_input"],
-        "reference": query_record.get("reference"),
-        "meta": query_record.get("meta", {}),
-        "llm_answer": llm_answer,
-        "retrieval_list": extract_retrieval_list(query_result),
-    }
 
 
 def extract_chunk_doc_id(raw_chunk: Any, default_doc_id: str | None = None) -> str | None:
@@ -484,17 +376,23 @@ def group_custom_chunk_payloads_by_doc_id(
 async def insert_custom_chunk_payloads(
     rag: Any,
     payloads: list[dict[str, Any]],
-    *,
-    max_parallel_payloads: int,
-) -> None:
+) -> tuple[list[Exception], int]:
+    """Insert pre-split custom chunk payloads grouped by doc_id.
+
+    Returns ``(insert_errors, total_document_groups)`` so the caller can
+    summarize whether graph construction succeeded for the configured documents.
+    """
     if not payloads:
-        return
+        return [], 0
 
     payload_groups, duplicate_doc_groups = group_custom_chunk_payloads_by_doc_id(
         payloads
     )
+    # Document-level parallelism mirrors rag.max_parallel_insert; the runner
+    # does not have an independent knob because LightRAG already owns the
+    # global LLM concurrency budget via llm_model_max_async.
     effective_max_parallel_insert = max(
-        1, int(getattr(rag, "max_parallel_insert", max_parallel_payloads))
+        1, int(getattr(rag, "max_parallel_insert", 1))
     )
     effective_llm_model_max_async = max(
         1, int(getattr(rag, "llm_model_max_async", 1))
@@ -657,6 +555,8 @@ async def insert_custom_chunk_payloads(
         if len(insert_errors) > 10:
             print(f"  ... and {len(insert_errors) - 10} more")
 
+    return insert_errors, len(payload_groups)
+
 
 @lru_cache(maxsize=4)
 def get_embedding_hf_tokenizer(model_name: str):
@@ -806,23 +706,34 @@ _embedding_client: Any = None
 _embedding_client_key: tuple | None = None
 
 
-def _get_embedding_client(
+async def _get_embedding_client(
     api_key: str,
     base_url: str,
     client_configs: dict[str, Any] | None = None,
 ) -> Any:
-    """Reuse a single AsyncOpenAI client for embedding to avoid per-call TCP overhead."""
+    """Reuse a single AsyncOpenAI client for embedding to avoid per-call TCP overhead.
+
+    When the (api_key, base_url, client_configs) tuple changes (e.g. switching
+    between jobs with different endpoints), the previous client is closed so
+    its connection pool is not leaked.
+    """
     from lightrag.llm.openai import create_openai_async_client
 
     global _embedding_client, _embedding_client_key
     key = (api_key, base_url, frozenset((client_configs or {}).items()))
     if _embedding_client is None or _embedding_client_key != key:
+        old_client = _embedding_client
         _embedding_client = create_openai_async_client(
             api_key=api_key,
             base_url=base_url,
             client_configs=client_configs,
         )
         _embedding_client_key = key
+        if old_client is not None:
+            try:
+                await old_client.close()
+            except Exception:
+                pass
     return _embedding_client
 
 
@@ -868,7 +779,7 @@ async def bge_openai_compatible_embed(
             max_token_size,
         )
 
-    client = _get_embedding_client(api_key, base_url, client_configs)
+    client = await _get_embedding_client(api_key, base_url, client_configs)
 
     api_params = {
         "model": model,
@@ -898,88 +809,168 @@ async def bge_openai_compatible_embed(
         ]
     )
 
-async def local_llm_complete(
-    prompt: str,
-    system_prompt: str | None = None,
-    history_messages: list[dict[str, Any]] | None = None,
-    **kwargs: Any,
-) -> str:
-    from lightrag.llm.openai import openai_complete_if_cache
+def build_local_llm_complete(
+    llm_config: OpenAICompatibleLLMConfig,
+) -> Callable[..., Any]:
+    """Build a per-job LLM completion closure so that multiple jobs can run
+    back-to-back with independent LLM configurations without relying on the
+    module-level CONFIG."""
 
-    llm_config = CONFIG.llm
-    request_kwargs: dict[str, Any] = {}
-    if llm_config.temperature is not None:
-        request_kwargs["temperature"] = llm_config.temperature
-    if llm_config.max_tokens is not None:
-        request_kwargs["max_tokens"] = llm_config.max_tokens
-    if llm_config.extra_body:
-        request_kwargs["extra_body"] = llm_config.extra_body
-    request_kwargs.update(kwargs)
+    async def local_llm_complete(
+        prompt: str,
+        system_prompt: str | None = None,
+        history_messages: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> str:
+        from lightrag.llm.openai import openai_complete_if_cache
 
-    return await openai_complete_if_cache(
-        model=llm_config.model,
-        prompt=prompt,
-        system_prompt=system_prompt,
-        history_messages=history_messages or [],
-        base_url=llm_config.base_url,
-        api_key=llm_config.api_key,
-        timeout=llm_config.timeout,
-        **request_kwargs,
+        request_kwargs: dict[str, Any] = {}
+        if llm_config.temperature is not None:
+            request_kwargs["temperature"] = llm_config.temperature
+        if llm_config.max_tokens is not None:
+            request_kwargs["max_tokens"] = llm_config.max_tokens
+        if llm_config.extra_body:
+            request_kwargs["extra_body"] = llm_config.extra_body
+        request_kwargs.update(kwargs)
+
+        return await openai_complete_if_cache(
+            model=llm_config.model,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages or [],
+            base_url=llm_config.base_url,
+            api_key=llm_config.api_key,
+            timeout=llm_config.timeout,
+            **request_kwargs,
+        )
+
+    return local_llm_complete
+
+
+def _strip_comments(overrides: dict[str, Any] | None) -> dict[str, Any]:
+    """Drop keys starting with '_' so users can inline JSON comments safely."""
+    if not overrides:
+        return {}
+    return {k: v for k, v in overrides.items() if not k.startswith("_")}
+
+
+def _merge_dataclass(base: Any, overrides: dict[str, Any] | None) -> Any:
+    """Merge a flat dict of overrides into an existing frozen dataclass.
+
+    Only known fields are accepted; unknown keys raise so that typos in
+    jobs.json surface immediately instead of being silently ignored.
+    Keys starting with '_' are treated as user comments and ignored.
+    """
+    effective = _strip_comments(overrides)
+    if not effective:
+        return base
+    allowed = {f.name for f in base.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+    unknown = set(effective) - allowed
+    if unknown:
+        raise ValueError(
+            f"Unknown override keys for {type(base).__name__}: {sorted(unknown)}"
+        )
+    return replace(base, **effective)
+
+
+def apply_job_overrides(base: RunConfig, job: dict[str, Any]) -> RunConfig:
+    """Produce a new RunConfig by applying a job's overrides on top of base.
+
+    Nested dicts for llm/embedding/milvus are merged field-wise.
+    If a job overrides `working_dir` but not `milvus.uri`, the Milvus URI is
+    reset to None so that `configure_local_milvus_lite` auto-derives
+    `<working_dir>/milvus_lite.db` instead of reusing the previous job's DB.
+    """
+    top_level_keys = {
+        "chunk_input_path",
+        "max_parallel_insert",
+        "llm_model_max_async",
+        "vector_storage",
+        "working_dir",
+    }
+    effective_job = {k: v for k, v in job.items() if not k.startswith("_")}
+    unknown = set(effective_job) - (
+        top_level_keys
+        | {"llm", "embedding", "milvus", "name", "enabled"}
+    )
+    if unknown:
+        raise ValueError(f"Unknown job keys: {sorted(unknown)}")
+
+    top_overrides = {k: effective_job[k] for k in top_level_keys if k in effective_job}
+
+    llm = _merge_dataclass(base.llm, effective_job.get("llm"))
+    embedding = _merge_dataclass(base.embedding, effective_job.get("embedding"))
+    milvus_override = effective_job.get("milvus")
+    effective_milvus_override = _strip_comments(milvus_override)
+    # If the job overrides working_dir and did not pin a concrete milvus.uri,
+    # reset milvus.uri to None so the new DB is derived from working_dir and
+    # we do not accidentally write into the previous job's Milvus Lite file.
+    if "working_dir" in effective_job and "uri" not in effective_milvus_override:
+        milvus = replace(
+            _merge_dataclass(base.milvus, milvus_override),
+            uri=None,
+        )
+    else:
+        milvus = _merge_dataclass(base.milvus, milvus_override)
+
+    return replace(
+        base,
+        **top_overrides,
+        llm=llm,
+        embedding=embedding,
+        milvus=milvus,
     )
 
 
-def build_rerank_model_func(config: RunConfig):
-    if not config.rerank.enabled:
-        return None
+def load_jobs_file(jobs_path: Path, base: RunConfig) -> list[tuple[str, RunConfig]]:
+    """Load jobs.json and return a list of (name, RunConfig) pairs to execute.
 
-    from lightrag.rerank import ali_rerank, cohere_rerank, jina_rerank
+    Schema:
+      {
+        "defaults": { ... same shape as a job, applied to base first ... },
+        "jobs": [ { "name": "...", "enabled": true, "chunk_input_path": "...", ... }, ... ]
+      }
+    Jobs with `"enabled": false` are skipped.
+    """
+    if not jobs_path.exists():
+        raise FileNotFoundError(f"Jobs file not found: {jobs_path}")
 
-    rerank_functions = {
-        "cohere": cohere_rerank,
-        "jina": jina_rerank,
-        "aliyun": ali_rerank,
-    }
-    selected_rerank_func = rerank_functions.get(config.rerank.binding)
-    if selected_rerank_func is None:
-        raise ValueError(
-            f"Unsupported rerank binding: {config.rerank.binding}. "
-            "Use one of: cohere, jina, aliyun."
-        )
+    raw = json.loads(jobs_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("Jobs file must be a JSON object with 'jobs' array")
 
-    async def local_rerank(
-        query: str,
-        documents: list[str],
-        top_n: int | None = None,
-        extra_body: dict[str, Any] | None = None,
-    ):
-        merged_extra_body = dict(config.rerank.extra_body)
-        if extra_body:
-            merged_extra_body.update(extra_body)
+    defaults = raw.get("defaults") or {}
+    base_with_defaults = apply_job_overrides(base, defaults) if defaults else base
 
-        request_kwargs: dict[str, Any] = {
-            "query": query,
-            "documents": documents,
-            "top_n": top_n,
-            "api_key": config.rerank.api_key,
-            "model": config.rerank.model,
-            "base_url": config.rerank.base_url,
-            "extra_body": merged_extra_body or None,
-        }
+    jobs_raw = raw.get("jobs")
+    if not isinstance(jobs_raw, list) or not jobs_raw:
+        raise ValueError("Jobs file must contain a non-empty 'jobs' array")
 
-        if config.rerank.binding == "cohere":
-            request_kwargs["enable_chunking"] = config.rerank.enable_chunking
-            request_kwargs["max_tokens_per_doc"] = config.rerank.max_tokens_per_doc
+    resolved: list[tuple[str, RunConfig]] = []
+    for index, job in enumerate(jobs_raw, start=1):
+        if not isinstance(job, dict):
+            raise ValueError(f"Job #{index} must be a JSON object")
+        if job.get("enabled", True) is False:
+            continue
+        name = str(job.get("name") or f"job_{index}")
+        cfg = apply_job_overrides(base_with_defaults, job)
+        resolved.append((name, cfg))
 
-        return await selected_rerank_func(**request_kwargs)
-
-    return local_rerank
+    if not resolved:
+        raise ValueError("All jobs are disabled; nothing to run")
+    return resolved
 
 
-async def run() -> None:
-    from lightrag import LightRAG, QueryParam
+async def run_single_job(name: str, config: RunConfig) -> None:
+    from lightrag import LightRAG
     from lightrag.utils import EmbeddingFunc
 
-    config = CONFIG
+    Path(config.working_dir).mkdir(parents=True, exist_ok=True)
+
+    print(f"\n========== Build Job: {name} ==========")
+    print(f"working_dir={config.working_dir}")
+    print(f"chunk_input_path={config.chunk_input_path}")
+
     milvus_db_path = configure_local_milvus_lite(config.working_dir, config.milvus)
     embedding_config = config.embedding
     embedding_func_impl = partial(
@@ -996,17 +987,16 @@ async def run() -> None:
         model_name=embedding_config.model,
         func=embedding_func_impl,
     )
-    rerank_model_func = build_rerank_model_func(config)
     max_parallel_insert = max(1, config.max_parallel_insert)
     llm_model_max_async = max(1, config.llm_model_max_async)
+
+    llm_complete_func = build_local_llm_complete(config.llm)
 
     rag = LightRAG(
         working_dir=config.working_dir,
         llm_model_name=config.llm.model,
-        llm_model_func=local_llm_complete,
+        llm_model_func=llm_complete_func,
         embedding_func=embedding_func,
-        rerank_model_func=rerank_model_func,
-        min_rerank_score=config.rerank.min_score,
         llm_model_max_async=llm_model_max_async,
         max_parallel_insert=max_parallel_insert,
         default_llm_timeout=config.llm.timeout,
@@ -1097,74 +1087,61 @@ async def run() -> None:
                 if len(existing_payloads) > 10:
                     print(f"  ... and {len(existing_payloads) - 10} more")
 
-            await insert_custom_chunk_payloads(
+            insert_errors, total_doc_groups = await insert_custom_chunk_payloads(
                 rag,
                 custom_chunk_payloads,
-                max_parallel_payloads=max_parallel_insert,
             )
+            if total_doc_groups > 0 and len(insert_errors) >= total_doc_groups:
+                print(
+                    "\n!!! All custom chunk inserts failed for this job. "
+                    "No graph data was built."
+                )
+                return
 
-        query_records = load_query_records(config)
-        results: list[dict[str, Any]] = []
-
-        print("\n=== Query Execution Preview ===")
-        print(f"Query count: {len(query_records)}")
-        print(f"Mode: {config.mode}")
-        if config.query_input_path:
-            print(
-                "Question source: query_input_path "
-                f"({config.query_input_path}); question is ignored when a query file is set"
-            )
         else:
-            print("Question source: question")
+            print("\n=== Custom Chunk Import Preview ===")
+            print("No custom chunk payloads configured; nothing to build.")
 
-        for index, query_record in enumerate(query_records, start=1):
-            print(f"Running query {index}/{len(query_records)}")
-            result = await rag.aquery_llm(
-                query_record["user_input"],
-                param=QueryParam(
-                    mode=config.mode,
-                    enable_rerank=config.rerank.enabled,
-                ),
-            )
-            # {
-            # "status": "success",
-            # "message": "Query processed successfully",
-            # "data": {
-            #     "entities": [...],
-            #     "relationships": [...],
-            #     "chunks": [...],
-            #     "references": [...]
-            # },
-            # "metadata": {
-            #     "query_mode": "hybrid",
-            #     "keywords": {
-            #     "high_level": [...],
-            #     "low_level": [...]
-            #     },
-            #     "processing_info": {
-            #     "...": "..."
-            #     }
-            # },
-            # "llm_response": {
-            #     "content": "LLM最终回答",
-            #     "response_iterator": null,
-            #     "is_streaming": false
-            # }
-            # }
-            results.append(build_output_record(query_record, result))
-
-        output_path = Path(config.output_path)
-        output_payload: dict[str, Any] | list[dict[str, Any]]
-        output_payload = results[0] if len(results) == 1 else results
-        output_path.write_text(
-            json.dumps(output_payload, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-
-        print("\n=== LightRAG Query Result ===")
-        print(f"Saved to: {output_path}")
+        print("\n=== LightRAG Build Result ===")
+        print(f"Graph/vector storage is ready in: {config.working_dir}")
+        return
     finally:
         await rag.finalize_storages()
+
+
+def _resolve_jobs_file() -> Path | None:
+    """Pick up a jobs file path from CLI args or the JOBS_FILE env var.
+
+    The first positional arg wins; otherwise fall back to env. Returns None
+    when no jobs file is configured, in which case the module-level CONFIG
+    is used as a single-job run (backward compatible).
+    """
+    if len(sys.argv) > 1 and sys.argv[1].strip():
+        return Path(sys.argv[1]).expanduser()
+    env_path = os.getenv("JOBS_FILE") or os.getenv("RUN_JOBS_FILE")
+    if env_path:
+        return Path(env_path).expanduser()
+    return None
+
+
+async def run() -> None:
+    jobs_file = _resolve_jobs_file()
+    if jobs_file is None:
+        await run_single_job("default", CONFIG)
+        return
+
+    jobs = load_jobs_file(jobs_file, CONFIG)
+    print(f"Loaded {len(jobs)} job(s) from {jobs_file}")
+    for index, (name, cfg) in enumerate(jobs, start=1):
+        print(f"\n>>> [{index}/{len(jobs)}] starting job: {name}")
+        try:
+            await run_single_job(name, cfg)
+        except Exception as exc:  # keep running remaining jobs
+            print(f"!!! job '{name}' failed: {exc}")
+            import traceback
+
+            traceback.print_exc()
+    print("\n========== All jobs finished ==========")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+{
+  "_comment": "Index for the split LightRAG job files. Do not pass this file to the runners; pass one of the concrete files below.",
+  "build_jobs_file": "workspace/jobs.build.example.json",
+  "query_jobs_file": "workspace/jobs.query.example.json",
+  "usage": {
+    "build_only": "python workspace/run_lightrag.py workspace/jobs.build.example.json",
+    "query_only": "python workspace/run_lightrag_query.py workspace/jobs.query.example.json"
+  },
+  "behavior": {
+    "run_lightrag.py": "Builds graph/vector storage from chunk_input_path only.",
+    "run_lightrag_query.py": "Loads existing storage from working_dir, runs query_input_path/question, and writes output_path."
+  }
+}
