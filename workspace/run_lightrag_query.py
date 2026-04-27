@@ -122,10 +122,15 @@ def normalize_query_record(record: dict[str, Any]) -> dict[str, Any]:
     if meta is None:
         meta = {}
 
+    question_id = record.get("question_id")
+    if question_id is None and isinstance(meta, dict):
+        question_id = meta.get("question_id")
+
     return {
         "user_input": question.strip(),
         "reference": reference,
         "meta": meta,
+        "question_id": question_id,
     }
 
 
@@ -165,12 +170,96 @@ def load_query_records(config: QueryRunConfig) -> list[dict[str, Any]]:
     return records
 
 
-def extract_retrieval_list(query_result: dict[str, Any]) -> list[dict[str, Any]]:
+def _extract_list(query_result: dict[str, Any], key: str) -> list[dict[str, Any]]:
     data = query_result.get("data", {})
-    chunks = data.get("chunks", [])
-    if isinstance(chunks, list):
-        return [chunk for chunk in chunks if isinstance(chunk, dict)]
+    items = data.get(key, [])
+    if isinstance(items, list):
+        return [item for item in items if isinstance(item, dict)]
     return []
+
+
+def extract_retrieval_list(query_result: dict[str, Any]) -> list[dict[str, Any]]:
+    return _extract_list(query_result, "chunks")
+
+
+def extract_entities_list(query_result: dict[str, Any]) -> list[dict[str, Any]]:
+    return _extract_list(query_result, "entities")
+
+
+def extract_relationships_list(query_result: dict[str, Any]) -> list[dict[str, Any]]:
+    return _extract_list(query_result, "relationships")
+
+
+def extract_references_list(query_result: dict[str, Any]) -> list[dict[str, Any]]:
+    return _extract_list(query_result, "references")
+
+
+def extract_retrieval_metadata(query_result: dict[str, Any]) -> dict[str, Any]:
+    metadata = query_result.get("metadata", {})
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _normalize_reference_to_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None and str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _flatten_gold_reference(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten meta.reference_contexts into the shape RetrievalEvaluator expects.
+
+    Source shape (from QA generator): list of groups, each group is a list of
+    {doc_id, chunk_id, source_filepath, ...}. The retrieval evaluator wants a
+    flat list of {doc_id, chunk_id, filepath, text}.
+    """
+    if not isinstance(meta, dict):
+        return []
+    raw = meta.get("reference_contexts")
+    if not isinstance(raw, list):
+        return []
+
+    flattened: list[dict[str, Any]] = []
+    for group in raw:
+        items = group if isinstance(group, list) else [group]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            flattened.append(
+                {
+                    "doc_id": item.get("doc_id"),
+                    "chunk_id": item.get("chunk_id"),
+                    "filepath": (
+                        item.get("filepath")
+                        or item.get("source_filepath")
+                        or item.get("file_path")
+                    ),
+                    "text": item.get("text", ""),
+                }
+            )
+    return flattened
+
+
+def _rename_chunks_for_retrieval_eval(
+    chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Map LightRAG chunk fields onto the names RetrievalEvaluator / RAGAS read:
+    `content` -> `text`, `file_path` -> `filepath`. Other identifiers are kept."""
+    renamed: list[dict[str, Any]] = []
+    for chunk in chunks:
+        renamed.append(
+            {
+                "doc_id": chunk.get("doc_id", ""),
+                "chunk_id": chunk.get("chunk_id", ""),
+                "text": chunk.get("content", ""),
+                "filepath": chunk.get("file_path", ""),
+                "custom_chunk_id": chunk.get("custom_chunk_id", ""),
+                "reference_id": chunk.get("reference_id", ""),
+            }
+        )
+    return renamed
 
 
 def build_output_record(
@@ -182,12 +271,24 @@ def build_output_record(
     if isinstance(llm_response, dict):
         llm_answer = llm_response.get("content")
 
+    meta = query_record.get("meta") or {}
     return {
-        "user_input": query_record["user_input"],
-        "reference": query_record.get("reference"),
-        "meta": query_record.get("meta", {}),
-        "llm_answer": llm_answer,
-        "retrieval_list": extract_retrieval_list(query_result),
+        # Field names chosen so each evaluator's fallback chain hits exactly one
+        # of these keys; no per-concept duplication.
+        "_id": query_record.get("question_id"),
+        "question": query_record["user_input"],
+        "llm_ans": llm_answer,
+        "answers": _normalize_reference_to_list(query_record.get("reference")),
+        "rag_retrieval": _rename_chunks_for_retrieval_eval(
+            extract_retrieval_list(query_result)
+        ),
+        "gold_reference": _flatten_gold_reference(meta),
+        # Pass-through context kept for inspection / future evaluators
+        "meta": meta,
+        "entities": extract_entities_list(query_result),
+        "relationships": extract_relationships_list(query_result),
+        "references": extract_references_list(query_result),
+        "retrieval_metadata": extract_retrieval_metadata(query_result),
     }
 
 

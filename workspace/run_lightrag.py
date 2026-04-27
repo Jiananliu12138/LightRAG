@@ -1110,6 +1110,8 @@ async def run_single_job(name: str, config: RunConfig) -> None:
         return
     finally:
         await rag.finalize_storages()
+        from lightrag.kg.shared_storage import finalize_share_data
+        finalize_share_data()
 
 
 class _TeeStream:
