@@ -72,6 +72,9 @@ class QueryRunConfig:
     vector_storage: str = "MilvusVectorDBStorage"
     working_dir: str = str(WORKING_DIR)
     output_path: str = str(OUTPUT_PATH)
+    # Default off for evaluation runs: avoid stale answers when the underlying
+    # graph changes but the query string stays the same. Override per job.
+    enable_llm_cache: bool = False
     llm: OpenAICompatibleLLMConfig = field(
         default_factory=lambda: OpenAICompatibleLLMConfig(
             model="Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
@@ -368,6 +371,7 @@ def apply_job_overrides(base: QueryRunConfig, job: dict[str, Any]) -> QueryRunCo
         "vector_storage",
         "working_dir",
         "output_path",
+        "enable_llm_cache",
     }
     effective_job = {k: v for k, v in job.items() if not k.startswith("_")}
     unknown = set(effective_job) - (
@@ -491,6 +495,7 @@ def build_query_rag(config: QueryRunConfig) -> tuple[LightRAG, str | None]:
         vector_db_storage_cls_kwargs=build_milvus_vector_storage_kwargs(
             config.milvus
         ),
+        enable_llm_cache=config.enable_llm_cache,
     )
     return rag, milvus_db_path
 
@@ -586,6 +591,37 @@ async def run_query_records(
     return results, query_errors
 
 
+def _assert_working_dir_has_built_graph(config: QueryRunConfig) -> None:
+    """Abort the query job if `working_dir` does not look like a built LightRAG
+    store. LightRAG silently creates an empty working_dir / Milvus collection
+    when it cannot find one, which would yield 0-recall evaluation runs that
+    look like model failure rather than a misconfigured path.
+    """
+    working_dir = Path(config.working_dir)
+    if not working_dir.is_dir():
+        raise FileNotFoundError(
+            f"working_dir does not exist: {working_dir}. "
+            "Build the index for this job first, or fix the path."
+        )
+
+    graph_file = working_dir / "graph_chunk_entity_relation.graphml"
+    milvus_db = working_dir / "milvus_lite.db"
+
+    missing: list[str] = []
+    if not graph_file.is_file() or graph_file.stat().st_size == 0:
+        missing.append(str(graph_file))
+    if not milvus_db.is_file() or milvus_db.stat().st_size == 0:
+        missing.append(str(milvus_db))
+
+    if missing:
+        raise FileNotFoundError(
+            "working_dir is missing built artifacts (file absent or empty): "
+            + ", ".join(missing)
+            + ". This job would query an empty knowledge graph; aborting to "
+            "avoid silently producing 0-recall evaluation results."
+        )
+
+
 def _warn_on_retrieval_mode_mismatch(config: QueryRunConfig) -> None:
     """Flag query-time Milvus settings that do not match common build outputs.
 
@@ -619,7 +655,9 @@ async def run_query_job(name: str, config: QueryRunConfig) -> None:
         f"milvus.enable_sparse={config.milvus.enable_sparse}"
     )
     print(f"rerank.enabled={config.rerank.enabled}")
+    print(f"enable_llm_cache={config.enable_llm_cache}")
     _warn_on_retrieval_mode_mismatch(config)
+    _assert_working_dir_has_built_graph(config)
 
     rag, milvus_db_path = build_query_rag(config)
     try:
