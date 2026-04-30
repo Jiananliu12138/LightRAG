@@ -104,7 +104,7 @@ CONFIG = QueryRunConfig()
 
 def is_query_record(payload: Any) -> bool:
     return isinstance(payload, dict) and any(
-        key in payload for key in ("user_input", "question", "query")
+        key in payload for key in ("user_input", "question", "query", "input")
     )
 
 
@@ -113,19 +113,26 @@ def normalize_query_record(record: dict[str, Any]) -> dict[str, Any]:
         record.get("user_input")
         or record.get("question")
         or record.get("query")
+        or record.get("input")
     )
     if not isinstance(question, str) or not question.strip():
-        raise ValueError("Query record must contain a non-empty user_input/question/query")
+        raise ValueError(
+            "Query record must contain a non-empty user_input/question/query/input"
+        )
 
     reference = record.get("reference")
     if reference is None:
         reference = record.get("ground_truth")
+    if reference is None:
+        reference = record.get("answers")
 
     meta = record.get("meta")
     if meta is None:
         meta = {}
 
     question_id = record.get("question_id")
+    if question_id is None:
+        question_id = record.get("_id")
     if question_id is None and isinstance(meta, dict):
         question_id = meta.get("question_id")
 
