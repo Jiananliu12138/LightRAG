@@ -158,49 +158,43 @@ def load_json_items(input_path: Path) -> list[Any]:
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     suffix = input_path.suffix.lower()
-    if suffix == ".jsonl":
-        text = input_path.read_text(encoding="utf-8")
-        items: list[Any] = []
-        decoder = json.JSONDecoder(strict=False)
-        position = 0
-        text_length = len(text)
-
-        while position < text_length:
-            while position < text_length and text[position].isspace():
-                position += 1
-            if position >= text_length:
-                break
-
-            try:
-                item, next_position = decoder.raw_decode(text, position)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    "Failed to parse JSONL input. This loader supports either "
-                    "standard one-JSON-object-per-line JSONL or multiple JSON "
-                    "objects separated by whitespace. If text fields contain "
-                    "literal newlines, they must be escaped as \\n inside JSON "
-                    "strings, or the file should be converted to a regular .json file."
-                ) from exc
-
-            items.append(item)
-            position = next_position
-
-        return items
-
-    if suffix == ".json":
-        payload = json.loads(input_path.read_text(encoding="utf-8"), strict=False)
-        if isinstance(payload, list):
-            return payload
-        if isinstance(payload, dict):
-            return [payload]
-
+    if suffix not in (".json", ".jsonl"):
         raise ValueError(
-            "Input JSON must contain either a payload object or a top-level array of payload objects"
+            f"Unsupported input file type: {input_path.suffix}. Only .json and .jsonl are supported."
         )
 
-    raise ValueError(
-        f"Unsupported input file type: {input_path.suffix}. Only .json and .jsonl are supported."
-    )
+    text = input_path.read_text(encoding="utf-8")
+    decoder = json.JSONDecoder(strict=False)
+    parsed: list[Any] = []
+    position = 0
+    text_length = len(text)
+
+    while position < text_length:
+        while position < text_length and text[position].isspace():
+            position += 1
+        if position >= text_length:
+            break
+
+        try:
+            item, next_position = decoder.raw_decode(text, position)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Failed to parse {suffix} input at char {position}. Supported "
+                "shapes: a single JSON object/array, JSONL (one object per line), "
+                "or multiple JSON objects separated by whitespace. If text fields "
+                "contain literal newlines, escape them as \\n inside JSON strings."
+            ) from exc
+
+        parsed.append(item)
+        position = next_position
+
+    # A single top-level array means "this file already is the list of items"
+    # (matches the original .json semantics where a top-level [..] was returned
+    # as-is). Anything else — one dict, multiple concatenated objects, or a
+    # mix — is treated as a sequence of items.
+    if len(parsed) == 1 and isinstance(parsed[0], list):
+        return parsed[0]
+    return parsed
 
 
 def load_custom_chunk_payloads(config: RunConfig) -> list[dict[str, Any]]:
