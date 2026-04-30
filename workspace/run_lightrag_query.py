@@ -214,9 +214,11 @@ def _normalize_reference_to_list(value: Any) -> list[str]:
 def _flatten_gold_reference(meta: dict[str, Any]) -> list[dict[str, Any]]:
     """Flatten meta.reference_contexts into the shape RetrievalEvaluator expects.
 
-    Source shape (from QA generator): list of groups, each group is a list of
-    {doc_id, chunk_id, source_filepath, ...}. The retrieval evaluator wants a
-    flat list of {doc_id, chunk_id, filepath, text}.
+    Source: `meta.reference_contexts` is a nested list of groups, each group is
+    a list of {doc_id, chunk_id, source_filepath, ...}. We emit a flat list of
+    {doc_id, chunk_id, filepath}. `text` is intentionally omitted — every gold
+    item has both doc_id and chunk_id, so RetrievalEvaluator's strongest match
+    branch (`doc:{did}#chunk:{cid}`) is used and `text` is never read.
     """
     if not isinstance(meta, dict):
         return []
@@ -239,7 +241,6 @@ def _flatten_gold_reference(meta: dict[str, Any]) -> list[dict[str, Any]]:
                         or item.get("source_filepath")
                         or item.get("file_path")
                     ),
-                    "text": item.get("text", ""),
                 }
             )
     return flattened
@@ -249,16 +250,27 @@ def _rename_chunks_for_retrieval_eval(
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Map LightRAG chunk fields onto the names RetrievalEvaluator / RAGAS read:
-    `content` -> `text`, `file_path` -> `filepath`. Other identifiers are kept."""
+    `content` -> `text`, `file_path` -> `filepath`. Critically, the `chunk_id`
+    we emit must be the *user-supplied* id (LightRAG stores this as
+    `custom_chunk_id`), not LightRAG's internal mdhash chunk_id — the gold
+    references use the user-supplied ids, so matching against the hash would
+    always miss."""
     renamed: list[dict[str, Any]] = []
     for chunk in chunks:
+        custom_chunk_id = chunk.get("custom_chunk_id", "")
+        # Fallback to LightRAG's internal id only when no user id was supplied
+        # (e.g. chunks ingested without a custom chunker). Eval will then drop
+        # to the text-hash matching branch in _doc_key.
+        chunk_id_for_eval = (
+            custom_chunk_id if custom_chunk_id not in (None, "") else chunk.get("chunk_id", "")
+        )
         renamed.append(
             {
                 "doc_id": chunk.get("doc_id", ""),
-                "chunk_id": chunk.get("chunk_id", ""),
+                "chunk_id": chunk_id_for_eval,
                 "text": chunk.get("content", ""),
                 "filepath": chunk.get("file_path", ""),
-                "custom_chunk_id": chunk.get("custom_chunk_id", ""),
+                "lightrag_chunk_id": chunk.get("chunk_id", ""),
                 "reference_id": chunk.get("reference_id", ""),
             }
         )
@@ -274,7 +286,6 @@ def build_output_record(
     if isinstance(llm_response, dict):
         llm_answer = llm_response.get("content")
 
-    meta = query_record.get("meta") or {}
     return {
         # Field names chosen so each evaluator's fallback chain hits exactly one
         # of these keys; no per-concept duplication.
@@ -285,9 +296,8 @@ def build_output_record(
         "rag_retrieval": _rename_chunks_for_retrieval_eval(
             extract_retrieval_list(query_result)
         ),
-        "gold_reference": _flatten_gold_reference(meta),
+        "gold_reference": _flatten_gold_reference(query_record.get("meta") or {}),
         # Pass-through context kept for inspection / future evaluators
-        "meta": meta,
         "entities": extract_entities_list(query_result),
         "relationships": extract_relationships_list(query_result),
         "references": extract_references_list(query_result),
