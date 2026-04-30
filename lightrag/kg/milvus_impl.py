@@ -1875,6 +1875,7 @@ class MilvusVectorDBStorage(BaseVectorStorage):
         results = self._client.search(
             collection_name=self.final_namespace,
             data=embedding,
+            anns_field="vector",
             limit=top_k,
             output_fields=output_fields,
             search_params=self._build_dense_search_params(include_radius=True),
