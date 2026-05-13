@@ -83,3 +83,8 @@ memory-bank
 CLAUDE.md
 workspace/rag_storage/
 workspace/rag_storage_milvus/
+workspace/LightRAG_database/
+workspace/Lumber_database/
+workspace/query_result/
+workspace/eval_result/
+workspace/jobs/
